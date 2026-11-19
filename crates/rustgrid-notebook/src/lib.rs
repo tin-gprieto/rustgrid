@@ -1,0 +1,18 @@
+//! SQL notebooks: an engine-agnostic notebook model that maps onto Jupyter's `.ipynb`.
+//!
+//! No GPUI or driver dependencies live here.
+
+mod model;
+
+pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding};
+
+/// Errors raised while reading or writing a notebook.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid notebook: {0}")]
+    Invalid(String),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

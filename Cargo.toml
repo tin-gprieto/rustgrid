@@ -5,6 +5,7 @@ members = [
     "crates/rustgrid-backup",
     "crates/rustgrid-export",
     "crates/rustgrid-import",
+    "crates/rustgrid-notebook",
     "crates/rustgrid-mysql",
     "crates/rustgrid-sqlite",
     "crates/rustgrid-sqlserver",
@@ -36,6 +37,7 @@ rustgrid-core = { path = "crates/rustgrid-core" }
 rustgrid-backup = { path = "crates/rustgrid-backup" }
 rustgrid-export = { path = "crates/rustgrid-export" }
 rustgrid-import = { path = "crates/rustgrid-import" }
+rustgrid-notebook = { path = "crates/rustgrid-notebook" }
 rustgrid-mysql = { path = "crates/rustgrid-mysql" }
 rustgrid-sqlite = { path = "crates/rustgrid-sqlite" }
 rustgrid-sqlserver = { path = "crates/rustgrid-sqlserver" }
