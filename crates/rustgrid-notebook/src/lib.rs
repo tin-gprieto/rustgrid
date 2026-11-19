@@ -4,10 +4,12 @@
 
 mod ipynb;
 mod model;
+mod outputs;
 mod write;
 
 pub use ipynb::read_ipynb;
 pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding, RawKind};
+pub use outputs::results_to_outputs;
 pub use write::write_ipynb;
 
 /// Errors raised while reading or writing a notebook.
