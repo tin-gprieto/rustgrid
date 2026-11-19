@@ -18,6 +18,10 @@ pub struct Notebook {
     pub binding: Option<NotebookBinding>,
     /// Unknown notebook-level metadata, preserved verbatim.
     pub extra_metadata: Map<String, Value>,
+    /// `(nbformat, nbformat_minor)` as read; `None` for a notebook not read from a file.
+    pub format_version: Option<(u32, u32)>,
+    /// Unknown top-level keys of the file, preserved verbatim.
+    pub extra_top_level: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,10 +32,22 @@ pub enum CellKind {
     Raw,
 }
 
+/// The nbformat `cell_type` a [`CellKind::Raw`] cell came from, so it is written back unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RawKind {
+    /// A `code` cell (Python, `%load_ext sql`, `%sql <url>`, ...).
+    #[default]
+    Code,
+    /// An nbformat `raw` cell.
+    Raw,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub id: String,
     pub kind: CellKind,
+    /// Only meaningful when `kind` is `Raw`.
+    pub raw_kind: RawKind,
     /// Cell text without the `%%sql` prefix.
     pub source: String,
     /// What follows `%%sql` on the first line.
@@ -39,6 +55,8 @@ pub struct Cell {
     pub outputs: Vec<CellOutput>,
     pub execution_count: Option<u32>,
     pub extra_metadata: Map<String, Value>,
+    /// Unknown cell-level keys (e.g. `attachments`), preserved verbatim.
+    pub extra_fields: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,6 +72,8 @@ pub enum CellOutput {
     Error {
         message: String,
     },
+    /// An nbformat output that has no structured equivalent, preserved verbatim.
+    Raw(Value),
 }
 
 impl Cell {
@@ -69,18 +89,20 @@ impl Cell {
         Self {
             id: generate_cell_id(),
             kind,
+            raw_kind: RawKind::Code,
             source: source.into(),
             magic_args: String::new(),
             outputs: Vec::new(),
             execution_count: None,
             extra_metadata: Map::new(),
+            extra_fields: Map::new(),
         }
     }
 }
 
 /// An nbformat 4.5 cell id: 16 hex digits of the clock plus a process-wide counter, so ids stay
 /// distinct even when generated within the same clock tick.
-fn generate_cell_id() -> String {
+pub(crate) fn generate_cell_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

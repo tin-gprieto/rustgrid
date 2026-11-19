@@ -2,9 +2,11 @@
 //!
 //! No GPUI or driver dependencies live here.
 
+mod ipynb;
 mod model;
 
-pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding};
+pub use ipynb::read_ipynb;
+pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding, RawKind};
 
 /// Errors raised while reading or writing a notebook.
 #[derive(Debug, thiserror::Error)]
