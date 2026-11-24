@@ -25,9 +25,9 @@ use super::{
     GRID_CONTEXT, GRID_STATUS_CONTEXT, GridDuplicateRow, GridEditValue, GridFirstCell,
     GridInsertRow, GridLastCell, GridNextCell, GridPageDown, GridPageUp, GridPrevCell, GridRefresh,
     GridRowEnd, GridRowStart, GridSelectPageDown, GridSelectPageUp, MoveLinesDown, MoveLinesUp,
-    NOTEBOOK_INPUT_CONTEXT, NewQueryTab, NextTab, NotebookLeaveEdit, NotebookRunAdvance,
-    NotebookRunCell, NotebookRunInsert, OBJECT_LIST_CONTEXT, ObjectDown, ObjectEnd,
-    ObjectFocusSearch, ObjectHome, ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp,
+    NOTEBOOK_CONTEXT, NOTEBOOK_INPUT_CONTEXT, NewQueryTab, NextTab, NotebookLeaveEdit,
+    NotebookRunAdvance, NotebookRunCell, NotebookRunInsert, OBJECT_LIST_CONTEXT, ObjectDown,
+    ObjectEnd, ObjectFocusSearch, ObjectHome, ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp,
     ObjectRename, ObjectRight, ObjectSelectAll, ObjectUp, OpenTransferConfig, PAGE_CONTEXT,
     PasteBackupFile, PasteQueryFile, PrevTab, QUERY_EDITOR_CONTEXT, QUERY_LIST_CONTEXT,
     QueryFocusSearch, ROW_FORM_CONTEXT, RefreshPage, RenameBackupFile, RenameQueryFile, RunQuery,
@@ -770,6 +770,14 @@ pub(super) const COMMANDS: &[Command] = &[
         "keymap.notebook.leave_edit",
         &["escape"],
         NotebookLeaveEdit
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_CONTEXT,
+        "notebook.show_completions",
+        "keymap.query.show_completions",
+        &["ctrl-space"],
+        ShowCompletions
     ),
 ];
 

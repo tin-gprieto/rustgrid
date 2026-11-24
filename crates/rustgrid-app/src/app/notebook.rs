@@ -173,9 +173,6 @@ impl AppView {
         let tab = self.notebooks.get(index)?;
         let tab_id = tab.id;
         let key = (tab_id, cell_id.to_string());
-        if let Some(editor) = self.notebook_editors.get(&key) {
-            return Some(editor.clone());
-        }
         let cell = &tab
             .cells
             .iter()
@@ -191,6 +188,36 @@ impl AppView {
             .unwrap_or_default();
         let supports_schemas = connection_index
             .is_some_and(|connection| self.driver_supports(connection, DriverCapability::Schemas));
+        if let Some(editor) = self.notebook_editors.get(&key).cloned() {
+            // Keep highlighting and completion in step with the notebook's connection/database.
+            if sql {
+                editor.update(cx, |editor, cx| {
+                    editor.set_scope(
+                        connection_index,
+                        database,
+                        schema,
+                        supports_schemas,
+                        dialect,
+                        false,
+                        false,
+                        cx,
+                    )
+                });
+            }
+            return Some(editor);
+        }
+        // Tables, columns and keywords, exactly like a query tab.
+        let completion = sql.then(|| {
+            self.sql_completion(
+                connection_index,
+                database.clone(),
+                schema.clone(),
+                supports_schemas,
+                dialect,
+                false,
+                cx,
+            )
+        });
         let options = ui::SqlEditorOptions {
             language: if sql { "sql" } else { "markdown" }.into(),
             font_family: self.editor_font().into(),
@@ -202,8 +229,12 @@ impl AppView {
         let zoom_weak = weak.clone();
         let change_id = cell_id.to_string();
         let editor = cx.new(|cx| {
-            let mut editor = ui::SqlEditor::new(cx)
-                .options(options)
+            let editor = ui::SqlEditor::new(cx).options(options);
+            let editor = match completion {
+                Some((provider, scope)) => editor.provider(provider).scope(scope),
+                None => editor,
+            };
+            let mut editor = editor
                 .on_change(Rc::new(move |text, cx| {
                     let _ = weak.update(cx, |app, cx| {
                         if let Some(position) = app.notebook_position(tab_id) {
@@ -215,10 +246,23 @@ impl AppView {
                                 .find(|state| state.cell.id == change_id)
                                 .map(|state| state.cell.source.lines().count());
                             tab.set_cell_source_by_id(&change_id, text);
+                            let kind = tab
+                                .cells
+                                .iter()
+                                .find(|state| state.cell.id == change_id)
+                                .map(|state| state.cell.kind);
+                            let dirty = tab.dirty;
+                            if kind == Some(rustgrid_notebook::CellKind::Sql) {
+                                let (connection, database, schema) = (
+                                    tab.connection_index,
+                                    tab.database.clone(),
+                                    tab.schema.clone(),
+                                );
+                                app.warm_completion_columns(connection, database, schema, text, cx);
+                            }
                             // Re-render only when something drawn outside the editor changes: the
                             // tab's `*` on the first edit, or the editor's height (its line count).
-                            if (!was_dirty && tab.dirty) || old_lines != Some(text.lines().count())
-                            {
+                            if (!was_dirty && dirty) || old_lines != Some(text.lines().count()) {
                                 cx.notify();
                             }
                         }
@@ -513,6 +557,10 @@ impl AppView {
                     elapsed,
                     cx,
                 );
+                // The notebook page scrolls around the grid: the wheel must reach it.
+                if let Some(grid) = self.grids.iter().find(|grid| grid.read(cx).state.id == id) {
+                    grid.update(cx, |grid, _| grid.scroll_chain = true);
+                }
                 grids.push(Some(id));
             }
         }

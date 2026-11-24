@@ -62,24 +62,15 @@ impl AppView {
             return Some(editor);
         }
 
-        let source = sql_completion::CompletionSource::new(self.completion_catalog.clone())
-            .with_scope(
-                connection_index,
-                database.clone(),
-                schema.clone(),
-                supports_schemas,
-                dialect,
-                key_value,
-            );
-        let loader_app = cx.weak_entity();
-        let source = source.with_column_loader(Rc::new(move |cx, connection, database, table| {
-            let _ = loader_app.update(cx, |app, cx| {
-                app.ensure_query_columns(cx, connection, &database, &table);
-            });
-        }));
-        let scope_handle = source.scope_handle();
-        let provider: Rc<dyn gpui_kit::component::input::CompletionProvider> =
-            Rc::new(sql_completion::SqlCompletionProvider::new(source));
+        let (provider, scope_handle) = self.sql_completion(
+            connection_index,
+            database.clone(),
+            schema.clone(),
+            supports_schemas,
+            dialect,
+            key_value,
+            cx,
+        );
         let options = ui::SqlEditorOptions {
             language: if documents {
                 "json"
@@ -129,8 +120,59 @@ impl AppView {
         if let Some(tab) = self.queries.get_mut(index) {
             tab.sql = text.to_string();
         }
-        // Warm the completion catalog's columns for every table the statement now references, so
-        // `alias.`/`table.` completion has types and comments ready.
+        self.warm_completion_columns(connection_index, database, schema, text, cx);
+        cx.notify();
+    }
+
+    /// The SQL completion provider for an editor scoped to a connection/database/schema, with the
+    /// handle [`ui::SqlEditor::set_scope`] re-scopes it through. Shared by query tabs and notebook
+    /// cells; columns are fetched on demand through [`AppView::ensure_query_columns`].
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn sql_completion(
+        &self,
+        connection_index: Option<usize>,
+        database: Option<String>,
+        schema: Option<String>,
+        supports_schemas: bool,
+        dialect: DriverDialect,
+        key_value: bool,
+        cx: &mut Context<'_, Self>,
+    ) -> (
+        Rc<dyn gpui_kit::component::input::CompletionProvider>,
+        Arc<std::sync::RwLock<sql_completion::CompletionScope>>,
+    ) {
+        let source = sql_completion::CompletionSource::new(self.completion_catalog.clone())
+            .with_scope(
+                connection_index,
+                database,
+                schema,
+                supports_schemas,
+                dialect,
+                key_value,
+            );
+        let loader_app = cx.weak_entity();
+        let source = source.with_column_loader(Rc::new(move |cx, connection, database, table| {
+            let _ = loader_app.update(cx, |app, cx| {
+                app.ensure_query_columns(cx, connection, &database, &table);
+            });
+        }));
+        let scope_handle = source.scope_handle();
+        (
+            Rc::new(sql_completion::SqlCompletionProvider::new(source)),
+            scope_handle,
+        )
+    }
+
+    /// Warm the completion catalog's columns for every table `text` references, so
+    /// `alias.`/`table.` completion has types and comments ready.
+    pub(super) fn warm_completion_columns(
+        &mut self,
+        connection_index: Option<usize>,
+        database: Option<String>,
+        schema: Option<String>,
+        text: &str,
+        cx: &mut Context<'_, Self>,
+    ) {
         if let Some(connection_index) = connection_index {
             let key_value = self.driver_supports(connection_index, DriverCapability::KeyValue);
             let documents = self.driver_supports(connection_index, DriverCapability::Documents);
@@ -154,7 +196,6 @@ impl AppView {
                 }
             }
         }
-        cx.notify();
     }
 
     /// Drop a closed tab's editor and shift the ones after it down.

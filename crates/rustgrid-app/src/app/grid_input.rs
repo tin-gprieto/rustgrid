@@ -398,7 +398,7 @@ impl GridView {
     /// selection where it is. This is the wheel's behaviour while a multi-cell range is selected:
     /// the range is what the user is reading, so the gesture must move the table under it instead
     /// of collapsing it to a cursor walk.
-    fn scroll_grid_view(&mut self, delta: f32, cx: &mut Context<'_, Self>) -> bool {
+    pub(super) fn scroll_grid_view(&mut self, delta: f32, cx: &mut Context<'_, Self>) -> bool {
         let handle = self.list_scroll.0.borrow().base_handle.clone();
         let viewport = f32::from(handle.bounds().size.height);
         let rows = self.display_row_count();

@@ -270,6 +270,17 @@ impl AppView {
                             }
                         }),
                     )
+                    .on_action(cx.listener({
+                        let editor = editor.clone();
+                        move |_this, _: &AcceptCompletion, window, cx| {
+                            // Tab takes the highlighted completion; with no popup open it falls
+                            // through to the editor's indent.
+                            if editor.update(cx, |editor, cx| editor.accept_completion(window, cx))
+                            {
+                                cx.stop_propagation();
+                            }
+                        }
+                    }))
                     .flex()
                     .flex_col()
                     .h(editor_height(&cell.source, self.editor_font_size()))

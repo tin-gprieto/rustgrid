@@ -1844,6 +1844,9 @@ struct GridView {
     app: WeakEntity<AppView>,
     runtime: Arc<Runtime>,
     theme: Theme,
+    /// The grid sits inside a scrolling page (a notebook cell's output): the vertical wheel scrolls
+    /// its rows while they can move and otherwise reaches the page, instead of walking the cursor.
+    scroll_chain: bool,
 
     hscroll: ScrollHandle,
     hscroll_grab: Option<f32>,
@@ -3365,6 +3368,8 @@ impl AppView {
             // later, wins; the handler lets the keystroke fall through to the kit when no menu is
             // open (see `AppView::render_query_editor`).
             KeyBinding::new("tab", AcceptCompletion, Some(QUERY_EDITOR_INPUT_CONTEXT)),
+            // The same for a notebook's SQL cells.
+            KeyBinding::new("tab", AcceptCompletion, Some(NOTEBOOK_INPUT_CONTEXT)),
         ]);
         // Every user command's keystrokes: built-in defaults, replaced by the settings' overrides,
         // and re-bound when the Options window applies a change.

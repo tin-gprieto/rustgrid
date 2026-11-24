@@ -82,6 +82,7 @@ impl GridView {
             app,
             runtime,
             theme,
+            scroll_chain: false,
             hscroll: ScrollHandle::new(),
             hscroll_grab: None,
             column_scroll: 0.0,
@@ -1449,7 +1450,11 @@ impl Render for GridView {
                                             this.scroll_grid_columns(dx, cx);
                                         }
                                         let vertical = dy != 0.0
-                                            && this.scroll_grid_selection(position, dy, cx);
+                                            && if this.scroll_chain {
+                                                this.scroll_grid_view(dy, cx)
+                                            } else {
+                                                this.scroll_grid_selection(position, dy, cx)
+                                            };
                                         let consumed = horizontal || vertical;
                                         if consumed {
                                             cx.stop_propagation();
