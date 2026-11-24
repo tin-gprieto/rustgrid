@@ -25,17 +25,18 @@ use super::{
     GRID_CONTEXT, GRID_STATUS_CONTEXT, GridDuplicateRow, GridEditValue, GridFirstCell,
     GridInsertRow, GridLastCell, GridNextCell, GridPageDown, GridPageUp, GridPrevCell, GridRefresh,
     GridRowEnd, GridRowStart, GridSelectPageDown, GridSelectPageUp, MoveLinesDown, MoveLinesUp,
-    NOTEBOOK_CONTEXT, NOTEBOOK_INPUT_CONTEXT, NewQueryTab, NextTab, NotebookLeaveEdit,
-    NotebookRunAdvance, NotebookRunCell, NotebookRunInsert, OBJECT_LIST_CONTEXT, ObjectDown,
-    ObjectEnd, ObjectFocusSearch, ObjectHome, ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp,
-    ObjectRename, ObjectRight, ObjectSelectAll, ObjectUp, OpenTransferConfig, PAGE_CONTEXT,
-    PasteBackupFile, PasteQueryFile, PrevTab, QUERY_EDITOR_CONTEXT, QUERY_LIST_CONTEXT,
-    QueryFocusSearch, ROW_FORM_CONTEXT, RefreshPage, RenameBackupFile, RenameQueryFile, RunQuery,
-    RunSelectedQuery, SaveDesign, SaveQuery, SaveRowForm, SelectAllBackups, SelectAllOccurrences,
-    SelectAllQueries, SelectAllStatusSql, SelectAllTransfers, SwapLineUp, TRANSFER_LIST_CONTEXT,
-    TREE_CONTEXT, ToggleComment, TreeCollapse, TreeDown, TreeEnd, TreeExpand, TreeFocusSearch,
-    TreeHome, TreeOpen, TreePageDown, TreePageUp, TreeRename, TreeSelectAll, TreeUp,
-    USER_LIST_CONTEXT, UserFocusSearch, WORKSPACE_CONTEXT,
+    NOTEBOOK_CONTEXT, NOTEBOOK_INPUT_CONTEXT, NOTEBOOK_VIEW_CONTEXT, NewQueryTab, NextTab,
+    NotebookLeaveEdit, NotebookRunAdvance, NotebookRunCell, NotebookRunInsert, NotebookSave,
+    NotebookSaveAs, OBJECT_LIST_CONTEXT, ObjectDown, ObjectEnd, ObjectFocusSearch, ObjectHome,
+    ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp, ObjectRename, ObjectRight,
+    ObjectSelectAll, ObjectUp, OpenTransferConfig, PAGE_CONTEXT, PasteBackupFile, PasteQueryFile,
+    PrevTab, QUERY_EDITOR_CONTEXT, QUERY_LIST_CONTEXT, QueryFocusSearch, ROW_FORM_CONTEXT,
+    RefreshPage, RenameBackupFile, RenameQueryFile, RunQuery, RunSelectedQuery, SaveDesign,
+    SaveQuery, SaveRowForm, SelectAllBackups, SelectAllOccurrences, SelectAllQueries,
+    SelectAllStatusSql, SelectAllTransfers, SwapLineUp, TRANSFER_LIST_CONTEXT, TREE_CONTEXT,
+    ToggleComment, TreeCollapse, TreeDown, TreeEnd, TreeExpand, TreeFocusSearch, TreeHome,
+    TreeOpen, TreePageDown, TreePageUp, TreeRename, TreeSelectAll, TreeUp, USER_LIST_CONTEXT,
+    UserFocusSearch, WORKSPACE_CONTEXT,
 };
 
 /// Where a command lives, for grouping the 快捷键 page.
@@ -770,6 +771,22 @@ pub(super) const COMMANDS: &[Command] = &[
         "keymap.notebook.leave_edit",
         &["escape"],
         NotebookLeaveEdit
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_VIEW_CONTEXT,
+        "notebook.save",
+        "query.save",
+        &["secondary-s"],
+        NotebookSave
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_VIEW_CONTEXT,
+        "notebook.save_as",
+        "notebook.save_as",
+        &["secondary-shift-s"],
+        NotebookSaveAs
     ),
     nav_command!(
         CommandGroup::Notebook,

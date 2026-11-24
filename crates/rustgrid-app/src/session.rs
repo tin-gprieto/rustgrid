@@ -1167,6 +1167,16 @@ impl NotebookTab {
         was_running
     }
 
+    /// The notebook was written to `path` bound to `connection_id`: it is clean and that file is
+    /// now where Save writes.
+    pub fn mark_saved(&mut self, path: std::path::PathBuf, connection_id: Option<String>) {
+        self.path = Some(path);
+        if connection_id.is_some() {
+            self.loaded_connection_id = connection_id;
+        }
+        self.dirty = false;
+    }
+
     pub fn set_binding(
         &mut self,
         connection_index: Option<usize>,
@@ -2414,6 +2424,25 @@ mod tests {
             assert!(!tab.cells[1].editing);
             assert!(!tab.select_cell(2));
             assert!(!tab.select_cell(9));
+        }
+
+        #[test]
+        fn saving_cleans_the_tab_and_keeps_its_binding() {
+            let mut tab = sql_tab();
+            tab.database = Some("shop".into());
+            let id = tab.cells[0].cell.id.clone();
+            tab.set_cell_source_by_id(&id, "SELECT 2");
+            assert!(tab.dirty);
+            tab.mark_saved("/tmp/a.ipynb".into(), Some("conn-1".into()));
+            assert!(!tab.dirty);
+            assert_eq!(
+                tab.path.as_deref(),
+                Some(std::path::Path::new("/tmp/a.ipynb"))
+            );
+            // A later save without a live connection keeps the id it was saved with.
+            let binding = tab.to_notebook(None).binding.expect("binding");
+            assert_eq!(binding.connection_id, "conn-1");
+            assert_eq!(binding.database.as_deref(), Some("shop"));
         }
 
         #[test]

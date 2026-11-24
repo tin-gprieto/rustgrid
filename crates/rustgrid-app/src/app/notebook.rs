@@ -657,6 +657,113 @@ impl AppView {
         self.close_notebook(id, cx);
     }
 
+    /// Write the notebook at `index` as `.ipynb`: to its file, or — for a new notebook and for
+    /// Save As — wherever the save dialog says, defaulting to the connection's notebook folder.
+    /// The tab is only marked clean when nothing changed while the dialog was open.
+    pub(super) fn save_notebook(
+        &mut self,
+        index: usize,
+        save_as: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get(index) else {
+            return;
+        };
+        let tab_id = tab.id;
+        let live_id = tab
+            .connection_index
+            .and_then(|connection| self.connections.get(connection))
+            .map(|node| node.profile.id.clone());
+        let notebook = tab.to_notebook(live_id.as_deref());
+        let connection_id = notebook
+            .binding
+            .as_ref()
+            .map(|binding| binding.connection_id.clone());
+        let text = rustgrid_notebook::write_ipynb(&notebook);
+        let target = if save_as { None } else { tab.path.clone() };
+        let file_name = format!(
+            "{}.ipynb",
+            tab.path
+                .as_ref()
+                .and_then(|path| path.file_stem())
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| t!("notebook.untitled").to_string())
+        );
+        let default_dir = tab
+            .path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| self.config.notebook_dir(connection_id.as_deref()));
+        let title = t!("notebook.save_as").to_string();
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |this, cx| {
+            let path = match target {
+                Some(path) => path,
+                None => {
+                    let _ = std::fs::create_dir_all(&default_dir);
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title(title)
+                        .add_filter("Jupyter Notebook", &["ipynb"])
+                        .set_directory(&default_dir)
+                        .set_file_name(file_name);
+                    let Some(handle) = dialog.save_file().await else {
+                        return;
+                    };
+                    let mut path = handle.path().to_path_buf();
+                    if path.extension().is_none() {
+                        path.set_extension("ipynb");
+                    }
+                    path
+                }
+            };
+            let write_path = path.clone();
+            let written_text = text.clone();
+            let result = runtime
+                .spawn_blocking(move || std::fs::write(&write_path, written_text))
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                let error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                };
+                if let Some(error) = error {
+                    app.toast(
+                        ToastKind::Error,
+                        t!("notebook.save_failed", error = error).to_string(),
+                        cx,
+                    );
+                    return;
+                }
+                let Some(position) = app.notebook_position(tab_id) else {
+                    return;
+                };
+                let live_id = app.notebooks[position]
+                    .connection_index
+                    .and_then(|connection| app.connections.get(connection))
+                    .map(|node| node.profile.id.clone());
+                let now = rustgrid_notebook::write_ipynb(
+                    &app.notebooks[position].to_notebook(live_id.as_deref()),
+                );
+                let tab = &mut app.notebooks[position];
+                if now == text {
+                    tab.mark_saved(path.clone(), connection_id);
+                } else {
+                    // Edited while the dialog was open: bound to the file, still unsaved.
+                    tab.path = Some(path.clone());
+                }
+                app.toast(
+                    ToastKind::Success,
+                    t!("notebook.saved", path = path.display().to_string()).to_string(),
+                    cx,
+                );
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Export the result sets of the cell at `cell` through the Export Wizard (each grid is
     /// "Result N", numbered within the cell like its output area).
     pub(super) fn export_notebook_cell(

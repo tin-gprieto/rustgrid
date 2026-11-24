@@ -292,6 +292,31 @@ mod tests {
         assert!(v["metadata"].get("rustgrid").is_none());
     }
 
+    /// The written file carries the connection by id only: no host, user or password can reach
+    /// it, because the binding is all the writer is given.
+    #[test]
+    fn binding_writes_only_the_connection_reference() {
+        let mut nb = nb_with(vec![Cell::new_sql("select 1")]);
+        nb.binding = Some(NotebookBinding {
+            connection_id: "conn-1".into(),
+            database: Some("shop".into()),
+            schema: None,
+        });
+        let v = parse(&nb);
+        let rg = v["metadata"]["rustgrid"].as_object().unwrap();
+        for key in rg.keys() {
+            assert!(
+                ["connection_id", "database", "schema"].contains(&key.as_str()),
+                "unexpected key {key}"
+            );
+        }
+        assert_eq!(rg["connection_id"], "conn-1");
+        let text = write_ipynb(&nb).to_lowercase();
+        for secret in ["password", "passwd", "secret", "\"host\""] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+
     #[test]
     fn load_ext_inserted_when_absent_and_not_duplicated() {
         let v = parse(&nb_with(vec![Cell::new_sql("select 1")]));

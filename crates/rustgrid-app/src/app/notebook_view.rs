@@ -142,6 +142,25 @@ impl AppView {
             ))
             .child(toolbar_separator(theme))
             .child(self.query_tool_button(
+                "notebook-save",
+                "icons/save.svg",
+                t!("query.save").to_string(),
+                theme.text,
+                theme.text,
+                true,
+                cx.listener(move |this, _event, _window, cx| this.save_notebook(index, false, cx)),
+            ))
+            .child(self.query_tool_button(
+                "notebook-save-as",
+                "icons/save.svg",
+                t!("notebook.save_as").to_string(),
+                theme.text,
+                theme.text,
+                true,
+                cx.listener(move |this, _event, _window, cx| this.save_notebook(index, true, cx)),
+            ))
+            .child(toolbar_separator(theme))
+            .child(self.query_tool_button(
                 "notebook-add-sql",
                 "icons/plus.svg",
                 t!("notebook.add_sql").to_string(),
@@ -188,6 +207,14 @@ impl AppView {
         }
 
         div()
+            // Ctrl+S / Ctrl+Shift+S from anywhere in the notebook (a cell editor included).
+            .key_context(NOTEBOOK_VIEW_CONTEXT)
+            .on_action(cx.listener(move |this, _: &NotebookSave, _window, cx| {
+                this.save_notebook(index, false, cx)
+            }))
+            .on_action(cx.listener(move |this, _: &NotebookSaveAs, _window, cx| {
+                this.save_notebook(index, true, cx)
+            }))
             .flex()
             .flex_col()
             .flex_1()

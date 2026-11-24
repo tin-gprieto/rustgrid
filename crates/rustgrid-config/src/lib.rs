@@ -26,6 +26,7 @@ const PRESERVE_OBJECT_SEARCH_SINCE: u32 = 14;
 const QUERIES_VERSION: u32 = 1;
 const QUERIES_FILE: &str = "queries.json";
 const QUERIES_DIR: &str = "queries";
+const NOTEBOOKS_DIR: &str = "notebooks";
 const BACKUPS_VERSION: u32 = 1;
 const BACKUPS_FILE: &str = "backups.json";
 const TRANSFERS_VERSION: u32 = 1;
@@ -694,6 +695,19 @@ impl ConfigStore {
             path = path.join(sanitize_component(schema));
         }
         path.join(format!("{}.sql", sanitize_component(name)))
+    }
+
+    /// The root directory of notebooks: `<root>/notebooks/<connection_id>/<name>.ipynb`, where a
+    /// new notebook is offered to be saved. A notebook can be saved anywhere else too; this is only
+    /// the default location (and the one the Queries list scans).
+    pub fn notebooks_dir(&self) -> PathBuf {
+        self.root.join(NOTEBOOKS_DIR)
+    }
+
+    /// The default folder for a connection's notebooks (`notebooks/_unbound` without one).
+    pub fn notebook_dir(&self, connection_id: Option<&str>) -> PathBuf {
+        self.notebooks_dir()
+            .join(sanitize_component(connection_id.unwrap_or("_unbound")))
     }
 
     /// The folder holding group queries, one subfolder per connection-tree group.

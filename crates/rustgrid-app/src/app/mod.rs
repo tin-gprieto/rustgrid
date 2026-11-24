@@ -146,7 +146,9 @@ gpui::actions!(
         NotebookRunCell,
         NotebookRunAdvance,
         NotebookRunInsert,
-        NotebookLeaveEdit
+        NotebookLeaveEdit,
+        NotebookSave,
+        NotebookSaveAs
     ]
 );
 
@@ -325,6 +327,9 @@ const QUERY_EDITOR_CONTEXT: &str = "QueryEditor";
 /// The editor's own `Input` context as seen from the query editor, for key bindings that must tie
 /// with the kit's text-input bindings and outrank them (later bindings win at equal depth).
 const QUERY_EDITOR_INPUT_CONTEXT: &str = "QueryEditor > Input";
+
+/// Key context of the whole notebook page (toolbar + cells), for Save / Save As.
+const NOTEBOOK_VIEW_CONTEXT: &str = "NotebookView";
 
 /// Key context of a notebook cell's editor wrapper (`notebook_view.rs`).
 const NOTEBOOK_CONTEXT: &str = "Notebook";
