@@ -899,6 +899,8 @@ impl AppView {
                     return;
                 };
                 let (_, now) = app.notebook_file_text(position);
+                // A notebook filed in the notebooks folder joins the Queries list.
+                app.refresh_query_files(cx);
                 let tab = &mut app.notebooks[position];
                 if now == text {
                     tab.mark_saved(path.clone(), connection_id);

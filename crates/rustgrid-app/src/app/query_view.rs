@@ -1293,7 +1293,7 @@ impl AppView {
                 .overflow_hidden()
                 .text_color(rgb(theme.text))
                 .child(ui::leading_icon_badge(
-                    "icons/queries.svg",
+                    query_file_icon(file),
                     theme.icon_queries,
                     ui::DETAIL_BADGE_SIZE,
                 ))
@@ -1468,7 +1468,7 @@ impl AppView {
             }),
         )
         .child(ui::leading_icon_badge(
-            "icons/queries.svg",
+            query_file_icon(file),
             theme.icon_queries,
             16.0,
         ))
@@ -1543,6 +1543,15 @@ impl AppView {
 const QUERY_TAG: &str = "SQL";
 
 /// A saved query's modified timestamp, or `--` when the filesystem did not report one.
+/// The row icon of a Queries list entry: a notebook's, or the saved query's.
+fn query_file_icon(file: &QueryFileInfo) -> &'static str {
+    if file.notebook {
+        "icons/notebook-text.svg"
+    } else {
+        "icons/queries.svg"
+    }
+}
+
 fn query_modified_text(file: &QueryFileInfo) -> String {
     file.modified
         .map(format_file_time)

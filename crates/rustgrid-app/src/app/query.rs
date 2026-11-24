@@ -2884,8 +2884,9 @@ impl AppView {
                 .enumerate()
                 .filter(|(_, file)| {
                     file.connection_id == connection_id
-                        && file.database == database
-                        && query_in_scope(file, schema.as_deref())
+                        && (file.notebook
+                            || (file.database == database
+                                && query_in_scope(file, schema.as_deref())))
                 })
                 .map(|(index, _)| index)
                 .collect();
@@ -2955,6 +2956,11 @@ impl AppView {
         let Some(file) = self.query_files.get(index) else {
             return;
         };
+        if file.notebook {
+            let path = file.path.clone();
+            self.open_notebook_path(path, cx);
+            return;
+        }
         let connection_id = file.connection_id.clone();
         let database = file.database.clone();
         let name = file.name.clone();
@@ -3160,7 +3166,16 @@ impl AppView {
             } else {
                 return;
             };
+        let notebook = super::file_drop::has_notebook_extension(&clipboard.path);
+        // A notebook is filed per connection, so it cannot be pasted into a group.
+        if notebook && group_id.is_some() {
+            return;
+        }
         let path_of = |name: &str| match group_id {
+            _ if notebook => self
+                .config
+                .notebook_dir(Some(&connection_id))
+                .join(format!("{name}.ipynb")),
             Some(group_id) => self.config.group_query_file_path(group_id, name),
             None => self
                 .config
@@ -3179,6 +3194,9 @@ impl AppView {
                 dest = path_of(&name);
                 number += 1;
             }
+        }
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::copy(&clipboard.path, &dest) {
             Ok(_) => {
@@ -3288,7 +3306,10 @@ impl AppView {
         let group_id = file.group_id;
         let database = file.database.clone();
         let schema = file.schema.clone();
-        let new_path = if let Some(group_id) = group_id {
+        let notebook = file.notebook;
+        let new_path = if notebook {
+            old_path.with_file_name(format!("{new_name}.ipynb"))
+        } else if let Some(group_id) = group_id {
             self.config.group_query_file_path(group_id, &new_name)
         } else {
             self.config
@@ -3301,6 +3322,15 @@ impl AppView {
         }
         match std::fs::rename(&old_path, &new_path) {
             Ok(()) => {
+                // An open notebook follows its file, so its next Save writes the new name.
+                if notebook {
+                    for tab in &mut self.notebooks {
+                        if tab.path.as_ref() == Some(&old_path) {
+                            tab.path = Some(new_path.clone());
+                        }
+                    }
+                    self.notify_tab_bar(cx);
+                }
                 self.refresh_query_files(cx);
                 if let Some(index) = self
                     .query_files
@@ -3561,8 +3591,48 @@ pub(super) fn scan_query_files(config: &ConfigStore) -> Vec<QueryFileInfo> {
             }
         }
     }
+    scan_notebook_files(config, &mut files);
     files.sort_by_key(|file| file.name.to_lowercase());
     files
+}
+
+/// Collect the notebooks filed under `notebooks/<connection_id>/` (see
+/// [`ConfigStore::notebook_dir`]); notebooks saved anywhere else are opened by path instead.
+fn scan_notebook_files(config: &ConfigStore, files: &mut Vec<QueryFileInfo>) {
+    let Ok(connections) = std::fs::read_dir(config.notebooks_dir()) else {
+        return;
+    };
+    for connection in connections.flatten() {
+        if !is_dir(&connection) {
+            continue;
+        }
+        let connection_id = connection.file_name().to_string_lossy().into_owned();
+        let Ok(entries) = std::fs::read_dir(connection.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !super::file_drop::has_notebook_extension(&path) {
+                continue;
+            }
+            let metadata = entry.metadata().ok();
+            files.push(QueryFileInfo {
+                name: path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                connection_id: connection_id.clone(),
+                group_id: None,
+                database: String::new(),
+                schema: None,
+                size: metadata.as_ref().map(|meta| meta.len()).unwrap_or(0),
+                created: metadata.as_ref().and_then(|meta| meta.created().ok()),
+                modified: metadata.and_then(|meta| meta.modified().ok()),
+                path,
+                notebook: true,
+            });
+        }
+    }
 }
 
 /// Whether a directory entry is itself a directory.
@@ -3602,6 +3672,7 @@ fn scan_query_dir(
             created: metadata.as_ref().and_then(|meta| meta.created().ok()),
             modified: metadata.and_then(|meta| meta.modified().ok()),
             path,
+            notebook: false,
         });
     }
 }
@@ -3765,6 +3836,34 @@ fn statement_at(
 #[cfg(test)]
 mod tests {
     use super::apply_statement_limit;
+
+    #[test]
+    fn notebooks_in_the_notebooks_folder_join_the_query_list() {
+        use super::scan_query_files;
+        use rustgrid_config::ConfigStore;
+
+        let root =
+            std::env::temp_dir().join(format!("rustgrid-query-scan-{}", crate::form::now_nanos()));
+        let config = ConfigStore::with_root(&root);
+        let query = config.query_file_path("conn-1", "shop", None, "orders");
+        std::fs::create_dir_all(query.parent().unwrap()).unwrap();
+        std::fs::write(&query, "SELECT 1").unwrap();
+        let dir = config.notebook_dir(Some("conn-1"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Report.ipynb"), "{}").unwrap();
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+
+        let files = scan_query_files(&config);
+        std::fs::remove_dir_all(&root).ok();
+        let names: Vec<(&str, bool)> = files
+            .iter()
+            .map(|file| (file.name.as_str(), file.notebook))
+            .collect();
+        assert_eq!(names, vec![("orders", false), ("Report", true)]);
+        let notebook = files.iter().find(|file| file.notebook).unwrap();
+        assert_eq!(notebook.connection_id, "conn-1");
+        assert!(notebook.database.is_empty());
+    }
 
     fn statements(n: usize) -> Vec<String> {
         (0..n).map(|i| format!("select {i}")).collect()

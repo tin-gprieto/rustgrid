@@ -581,6 +581,9 @@ struct QueryFileInfo {
     size: u64,
     created: Option<std::time::SystemTime>,
     modified: Option<std::time::SystemTime>,
+    /// A notebook (`notebooks/<connection_id>/<name>.ipynb`) rather than a `.sql` query. It is
+    /// filed per connection, so `database` is empty and it shows for every database of it.
+    notebook: bool,
 }
 
 /// A saved-query column the Queries 详细列表 can sort by.
