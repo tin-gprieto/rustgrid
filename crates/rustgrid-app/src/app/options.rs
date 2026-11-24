@@ -388,6 +388,8 @@ impl AppView {
         self.options_single_click_open = self.single_click_open;
         self.options_stop_on_error = self.stop_on_error;
         self.set_options_max_statements(self.max_statements_per_run.to_string(), cx);
+        self.options_notebook_save_outputs = self.notebook_save_outputs;
+        self.set_options_notebook_rows(self.notebook_output_max_rows.to_string(), cx);
         self.mcp_options = options_mcp::McpOptionsState::load(&self.config);
         self.options_mcp_max_rows_input = None;
         self.options_mcp_timeout_input = None;
@@ -700,6 +702,10 @@ impl AppView {
         // An empty or invalid entry keeps the current limit.
         if let Ok(limit) = self.options_max_statements.trim().parse::<u32>() {
             self.max_statements_per_run = limit;
+        }
+        self.notebook_save_outputs = self.options_notebook_save_outputs;
+        if let Ok(rows) = self.options_notebook_rows.trim().parse::<u32>() {
+            self.notebook_output_max_rows = rows;
         }
         // The MCP settings are one file, saved on 确定 like the rest of the page. Read the live
         // field values first because an input's change callback is dispatched on its next render.
@@ -1715,6 +1721,78 @@ impl AppView {
                     })),
                 ),
             )
+            .child(section_label(
+                theme,
+                t!("options.notebook.section").to_string(),
+            ))
+            .child(
+                settings_card(theme)
+                    .child(
+                        toggle_row(
+                            theme,
+                            "options-notebook-save-outputs",
+                            t!("options.notebook.save_outputs").to_string(),
+                            Some(t!("options.notebook.save_outputs_hint").to_string()),
+                            self.options_notebook_save_outputs,
+                            true,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            self.copy_label_menu(
+                                t!("options.notebook.save_outputs").to_string(),
+                                cx,
+                            ),
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
+                                this.options_notebook_save_outputs =
+                                    !this.options_notebook_save_outputs;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        setting_row(
+                            "options-notebook-rows",
+                            theme,
+                            t!("options.notebook.max_rows").to_string(),
+                            Some(t!("options.notebook.max_rows_hint").to_string()),
+                            div()
+                                .w(px(80.0))
+                                .flex_none()
+                                .children(self.options_notebook_rows_input.clone())
+                                .into_any_element(),
+                            false,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            self.copy_label_menu(t!("options.notebook.max_rows").to_string(), cx),
+                        ),
+                    ),
+            )
+    }
+
+    /// Stage the notebook output row cap and show it in its field (built on first use).
+    fn set_options_notebook_rows(&mut self, value: String, cx: &mut Context<'_, Self>) {
+        self.options_notebook_rows = value.clone();
+        if let Some(input) = self.options_notebook_rows_input.clone() {
+            input.update(cx, |input, cx| input.set_text(value, cx));
+            return;
+        }
+        let theme = self.theme;
+        let weak = cx.weak_entity();
+        let input = cx.new(move |cx| {
+            TextInput::new(theme, value, TextInputOptions::default(), cx).on_change(Rc::new(
+                move |text, _window, cx| {
+                    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+                    let _ = weak.update(cx, |app, cx| {
+                        app.options_notebook_rows = digits;
+                        cx.notify();
+                    });
+                },
+            ))
+        });
+        self.options_notebook_rows_input = Some(input);
     }
 
     /// Stage the statement limit and show it in its field (built on first use).
@@ -1944,6 +2022,11 @@ impl AppView {
                     this.options_stop_on_error = false;
                     this.set_options_max_statements(
                         rustgrid_config::DEFAULT_MAX_STATEMENTS.to_string(),
+                        cx,
+                    );
+                    this.options_notebook_save_outputs = true;
+                    this.set_options_notebook_rows(
+                        rustgrid_config::DEFAULT_NOTEBOOK_OUTPUT_ROWS.to_string(),
                         cx,
                     );
                     this.recording_shortcut = None;

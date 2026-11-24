@@ -14,9 +14,6 @@ use std::rc::Rc;
 use super::runsql::ScriptSessionGuard;
 use super::*;
 
-/// How many rows of each result set a cell keeps in its outputs (and so writes to the file).
-const NOTEBOOK_OUTPUT_MAX_ROWS: usize = 100;
-
 /// What [`AppView::run_notebook_cell`] did with a cell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum CellRunStart {
@@ -503,7 +500,11 @@ impl AppView {
             elapsed,
             &results,
             error,
-            NOTEBOOK_OUTPUT_MAX_ROWS,
+            // 0 in Options means no limit.
+            match self.notebook_output_max_rows {
+                0 => usize::MAX,
+                rows => rows as usize,
+            },
         );
         if installed {
             self.install_notebook_result_grids(position, cell_id, results, elapsed, cx);
@@ -797,6 +798,33 @@ impl AppView {
         cx.notify();
     }
 
+    /// What Save writes for the notebook at `index`: its bound connection id and the `.ipynb`
+    /// text. With Options → 保存结果 off the file carries no outputs or execution counts (the open
+    /// tab keeps them).
+    fn notebook_file_text(&self, index: usize) -> (Option<String>, String) {
+        let Some(tab) = self.notebooks.get(index) else {
+            return (None, String::new());
+        };
+        let live_id = tab
+            .connection_index
+            .and_then(|connection| self.connections.get(connection))
+            .map(|node| node.profile.id.clone());
+        let mut notebook = tab.to_notebook(live_id.as_deref());
+        if !self.notebook_save_outputs {
+            for cell in &mut notebook.cells {
+                if cell.kind == rustgrid_notebook::CellKind::Sql {
+                    cell.outputs.clear();
+                    cell.execution_count = None;
+                }
+            }
+        }
+        let connection_id = notebook
+            .binding
+            .as_ref()
+            .map(|binding| binding.connection_id.clone());
+        (connection_id, rustgrid_notebook::write_ipynb(&notebook))
+    }
+
     /// Write the notebook at `index` as `.ipynb`: to its file, or — for a new notebook and for
     /// Save As — wherever the save dialog says, defaulting to the connection's notebook folder.
     /// The tab is only marked clean when nothing changed while the dialog was open.
@@ -810,16 +838,7 @@ impl AppView {
             return;
         };
         let tab_id = tab.id;
-        let live_id = tab
-            .connection_index
-            .and_then(|connection| self.connections.get(connection))
-            .map(|node| node.profile.id.clone());
-        let notebook = tab.to_notebook(live_id.as_deref());
-        let connection_id = notebook
-            .binding
-            .as_ref()
-            .map(|binding| binding.connection_id.clone());
-        let text = rustgrid_notebook::write_ipynb(&notebook);
+        let (connection_id, text) = self.notebook_file_text(index);
         let target = if save_as { None } else { tab.path.clone() };
         let file_name = format!(
             "{}.ipynb",
@@ -879,13 +898,7 @@ impl AppView {
                 let Some(position) = app.notebook_position(tab_id) else {
                     return;
                 };
-                let live_id = app.notebooks[position]
-                    .connection_index
-                    .and_then(|connection| app.connections.get(connection))
-                    .map(|node| node.profile.id.clone());
-                let now = rustgrid_notebook::write_ipynb(
-                    &app.notebooks[position].to_notebook(live_id.as_deref()),
-                );
+                let (_, now) = app.notebook_file_text(position);
                 let tab = &mut app.notebooks[position];
                 if now == text {
                     tab.mark_saved(path.clone(), connection_id);

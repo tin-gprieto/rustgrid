@@ -351,6 +351,12 @@ struct SettingsFile {
     /// Stop a script at its first failing statement (off: run the rest and report each).
     #[serde(default)]
     stop_on_error: bool,
+    /// Write cell results into a saved `.ipynb` (off: the file carries no outputs).
+    #[serde(default = "default_true")]
+    notebook_save_outputs: bool,
+    /// The most rows a notebook cell keeps as its output (0: no limit).
+    #[serde(default = "default_notebook_output_rows")]
+    notebook_output_max_rows: u32,
     /// Version 11's 运行 keystroke. Read so an upgrade keeps it (folded into `shortcuts`), never
     /// written.
     #[serde(default, skip_serializing)]
@@ -431,6 +437,13 @@ fn default_max_statements() -> u32 {
     DEFAULT_MAX_STATEMENTS
 }
 
+/// The default number of rows a notebook cell keeps as its output (and writes to the `.ipynb`).
+pub const DEFAULT_NOTEBOOK_OUTPUT_ROWS: u32 = 100;
+
+fn default_notebook_output_rows() -> u32 {
+    DEFAULT_NOTEBOOK_OUTPUT_ROWS
+}
+
 #[derive(Debug, Clone)]
 pub struct AppSettings {
     pub theme: ThemeSetting,
@@ -496,6 +509,10 @@ pub struct AppSettings {
     pub max_statements_per_run: u32,
     /// Stop a script at its first failing statement (off: run the rest and report each).
     pub stop_on_error: bool,
+    /// Write cell results into a saved notebook file (off: Jupyter's "clear outputs" on save).
+    pub notebook_save_outputs: bool,
+    /// The most rows a notebook cell keeps as its output (0: no limit).
+    pub notebook_output_max_rows: u32,
 }
 
 impl Default for AppSettings {
@@ -532,6 +549,8 @@ impl Default for AppSettings {
             single_click_open: false,
             max_statements_per_run: DEFAULT_MAX_STATEMENTS,
             stop_on_error: false,
+            notebook_save_outputs: true,
+            notebook_output_max_rows: DEFAULT_NOTEBOOK_OUTPUT_ROWS,
         }
     }
 }
@@ -879,6 +898,8 @@ impl ConfigStore {
             single_click_open: file.single_click_open,
             max_statements_per_run: file.max_statements_per_run,
             stop_on_error: file.stop_on_error,
+            notebook_save_outputs: file.notebook_save_outputs,
+            notebook_output_max_rows: file.notebook_output_max_rows,
         })
     }
 
@@ -917,6 +938,8 @@ impl ConfigStore {
             single_click_open: settings.single_click_open,
             max_statements_per_run: settings.max_statements_per_run,
             stop_on_error: settings.stop_on_error,
+            notebook_save_outputs: settings.notebook_save_outputs,
+            notebook_output_max_rows: settings.notebook_output_max_rows,
             run_shortcut: None,
             run_selected_shortcut: None,
         };
@@ -1160,6 +1183,13 @@ mod tests {
         let json = serde_json::to_string(&saved).expect("serialize");
         assert!(!json.contains("run_shortcut"));
         assert!(json.contains(r#""query.run":["f9"]"#));
+    }
+
+    #[test]
+    fn notebook_settings_default_on_for_older_files() {
+        let file: SettingsFile = serde_json::from_str(r#"{ "version": 18 }"#).expect("parse");
+        assert!(file.notebook_save_outputs);
+        assert_eq!(file.notebook_output_max_rows, DEFAULT_NOTEBOOK_OUTPUT_ROWS);
     }
 
     #[test]

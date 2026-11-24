@@ -2777,6 +2777,10 @@ pub struct AppView {
     max_statements_per_run: u32,
     /// Stop a script at its first failing statement (Options → General).
     stop_on_error: bool,
+    /// Write cell results into saved notebooks (Options → General).
+    notebook_save_outputs: bool,
+    /// The most rows a notebook cell keeps as its output, 0 for no limit (Options → General).
+    notebook_output_max_rows: u32,
     /// Staged MCP options in the Options dialog.
     mcp_options: options_mcp::McpOptionsState,
     options_mcp_max_rows_input: Option<Entity<TextInput>>,
@@ -2916,6 +2920,9 @@ pub struct AppView {
     /// The staged 常规 page statement limit (as typed) and stop-on-error toggle, applied on OK.
     options_max_statements: String,
     options_max_statements_input: Option<Entity<TextInput>>,
+    options_notebook_save_outputs: bool,
+    options_notebook_rows: String,
+    options_notebook_rows_input: Option<Entity<TextInput>>,
     options_stop_on_error: bool,
     /// The Options window's right-click menu on a setting: where, and the setting's label.
     options_copy_menu: Option<(Point<Pixels>, String)>,
@@ -3670,6 +3677,8 @@ impl AppView {
             single_click_open: settings.single_click_open,
             max_statements_per_run: settings.max_statements_per_run,
             stop_on_error: settings.stop_on_error,
+            notebook_save_outputs: settings.notebook_save_outputs,
+            notebook_output_max_rows: settings.notebook_output_max_rows,
             mcp_options: options_mcp::McpOptionsState::default(),
             options_mcp_max_rows_input: None,
             options_mcp_timeout_input: None,
@@ -3820,6 +3829,9 @@ impl AppView {
             backup_sort: DetailSort::default(),
             options_max_statements: settings.max_statements_per_run.to_string(),
             options_max_statements_input: None,
+            options_notebook_save_outputs: settings.notebook_save_outputs,
+            options_notebook_rows: settings.notebook_output_max_rows.to_string(),
+            options_notebook_rows_input: None,
             options_stop_on_error: settings.stop_on_error,
             options_copy_menu: None,
             options_highlight: None,
@@ -4208,6 +4220,8 @@ impl AppView {
             single_click_open: self.single_click_open,
             max_statements_per_run: self.max_statements_per_run,
             stop_on_error: self.stop_on_error,
+            notebook_save_outputs: self.notebook_save_outputs,
+            notebook_output_max_rows: self.notebook_output_max_rows,
         }) {
             // Preferences failing to persist is not worth a modal; note it in the log line only.
             let _ = error;
