@@ -219,7 +219,8 @@ not a later refactor.
   mapping (no GPUI, no drivers). `read_ipynb` / `write_ipynb` speak nbformat 4.5 in **JupySQL**'s
   shape: an SQL cell is a code cell starting with `%%sql` (the line's arguments kept verbatim in
   `magic_args`, never interpreted), any other code cell is a `Raw` cell kept as it is, a
-  `%load_ext sql` cell is added when none loads the extension, results are `execute_result`
+  `%load_ext sql` cell is added when none loads the extension (the app keeps a pure loader cell,
+  `Cell::is_sql_extension_loader`, out of the cell list and writes it back first), results are `execute_result`
   `text/html` + `text/plain` tables (`results_to_outputs`, capped by a row count), and everything
   unmodelled (metadata, unknown outputs, top-level keys) round-trips. `metadata.rustgrid` holds only
   the connection's **profile id**, database and schema (a test asserts no host/user/password reaches

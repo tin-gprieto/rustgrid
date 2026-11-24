@@ -29,7 +29,7 @@ Notebooks need a SQL engine: Redis and MongoDB connections do not offer them.
 | --- | --- |
 | **SQL** | Runs its statements in order on the notebook's session and shows every result set as a grid (up to 10 rows high, scrolling past that); a statement without rows shows its affected-row count. The first failing statement stops the cell and is shown in red. |
 | **Markdown** | Rendered text. Double-click to edit; ✓ in its header, `Ctrl+Enter` or selecting another cell renders it again. |
-| **Raw** | Any other code cell of an opened file (Python, `%sql` line magics, `%load_ext sql`, …) or an nbformat `raw` cell. Shown read-only and kept as it is; RustGrid never runs it. |
+| **Raw** | Any other code cell of an opened file (Python, `%sql` line magics, …) or an nbformat `raw` cell. Shown read-only and kept as it is; RustGrid never runs it. |
 
 Each cell header offers change type (SQL ↔ Markdown), move up / down, delete, and — when the cell has
 results — **Export results**, which opens the Export Wizard (several result sets can go into one
@@ -82,7 +82,8 @@ The file is nbformat 4.5 for a Python kernel:
 
 - an SQL cell is a code cell starting with `%%sql` (anything after `%%sql` on that line is kept but
   not interpreted by RustGrid);
-- a `%load_ext sql` cell is added at the top when the file has none, so JupySQL loads;
+- a `%load_ext sql` cell is added at the top when the file has none, so JupySQL loads. RustGrid
+  does not show a cell that only loads the extension, and writes it back unchanged on save;
 - results are `execute_result` outputs with `text/html` and `text/plain` tables, errors are `error`
   outputs — up to **Rows kept per result** rows each (Options → General → Notebooks, default 100;
   0 for no limit). With **Save results in the notebook file** off the file carries no outputs or

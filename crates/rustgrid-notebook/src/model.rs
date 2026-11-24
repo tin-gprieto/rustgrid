@@ -85,6 +85,22 @@ impl Cell {
         Self::new(CellKind::Markdown, source)
     }
 
+    /// A code cell that only loads JupySQL (`%load_ext sql` / `%reload_ext sql`, blank lines
+    /// allowed). [`crate::write_ipynb`] adds one when a notebook has none, so the app keeps such a
+    /// cell out of sight instead of showing it as a Raw cell.
+    pub fn is_sql_extension_loader(&self) -> bool {
+        let mut lines = self
+            .source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .peekable();
+        self.kind == CellKind::Raw
+            && self.raw_kind == RawKind::Code
+            && lines.peek().is_some()
+            && lines.all(|line| matches!(line, "%load_ext sql" | "%reload_ext sql"))
+    }
+
     fn new(kind: CellKind, source: impl Into<String>) -> Self {
         Self {
             id: generate_cell_id(),
@@ -115,6 +131,22 @@ pub(crate) fn generate_cell_id() -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn only_a_pure_loader_cell_is_an_extension_loader() {
+        let raw = |source: &str| Cell {
+            kind: CellKind::Raw,
+            ..Cell::new_sql(source)
+        };
+        assert!(raw("%load_ext sql").is_sql_extension_loader());
+        assert!(raw("\n  %reload_ext sql \n").is_sql_extension_loader());
+        assert!(!raw("%load_ext sql\n%sql sqlite://").is_sql_extension_loader());
+        assert!(!raw("").is_sql_extension_loader());
+        assert!(!Cell::new_sql("%load_ext sql").is_sql_extension_loader());
+        let mut nbformat_raw = raw("%load_ext sql");
+        nbformat_raw.raw_kind = RawKind::Raw;
+        assert!(!nbformat_raw.is_sql_extension_loader());
+    }
 
     #[test]
     fn generated_ids_are_valid_and_distinct() {

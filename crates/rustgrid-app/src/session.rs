@@ -835,6 +835,9 @@ pub struct NotebookTab {
     /// The loaded notebook with its cells and binding removed: carries the metadata, format
     /// version and top-level keys that [`NotebookTab::to_notebook`] writes back unchanged.
     base: rustgrid_notebook::Notebook,
+    /// The file's `%load_ext sql` cells: kept out of the cell list (they are plumbing for
+    /// JupySQL, not content) and written back first, unchanged, on save.
+    loader_cells: Vec<rustgrid_notebook::Cell>,
 }
 
 #[allow(dead_code)] // wired to the UI and execution in later notebook stages
@@ -845,7 +848,9 @@ impl NotebookTab {
         path: Option<std::path::PathBuf>,
         connection_index: Option<usize>,
     ) -> Self {
-        let cells = std::mem::take(&mut notebook.cells);
+        let (loader_cells, cells): (Vec<_>, Vec<_>) = std::mem::take(&mut notebook.cells)
+            .into_iter()
+            .partition(rustgrid_notebook::Cell::is_sql_extension_loader);
         let binding = notebook.binding.take();
         let execution_counter = cells
             .iter()
@@ -868,6 +873,7 @@ impl NotebookTab {
             run_cancel: None,
             run_queue: std::collections::VecDeque::new(),
             base: notebook,
+            loader_cells,
         }
     }
 
@@ -877,7 +883,12 @@ impl NotebookTab {
     /// goes through [`NotebookTab::set_binding`], which forgets the loaded id.
     pub fn to_notebook(&self, connection_id: Option<&str>) -> rustgrid_notebook::Notebook {
         let mut notebook = self.base.clone();
-        notebook.cells = self.cells.iter().map(|state| state.cell.clone()).collect();
+        notebook.cells = self
+            .loader_cells
+            .iter()
+            .cloned()
+            .chain(self.cells.iter().map(|state| state.cell.clone()))
+            .collect();
         let connection_id = connection_id
             .map(str::to_owned)
             .or_else(|| self.loaded_connection_id.clone());
@@ -2201,6 +2212,28 @@ mod tests {
             assert!(tab.dirty);
             assert_eq!(tab.connection_index, Some(3));
             assert_eq!(tab.database.as_deref(), Some("d"));
+        }
+
+        #[test]
+        fn the_jupysql_loader_cell_is_hidden_and_written_back_once() {
+            let text = rustgrid_notebook::write_ipynb(&rustgrid_notebook::Notebook {
+                cells: vec![rustgrid_notebook::Cell::new_sql("select 1")],
+                ..Default::default()
+            });
+            let notebook = rustgrid_notebook::read_ipynb(&text).unwrap();
+            assert_eq!(notebook.cells.len(), 2, "the writer added %load_ext sql");
+            let loader_id = notebook.cells[0].id.clone();
+
+            let tab = NotebookTab::from_notebook(1, notebook, None, None);
+            assert_eq!(tab.cells.len(), 1);
+            assert_eq!(tab.cells[0].cell.source, "select 1");
+
+            let again = rustgrid_notebook::read_ipynb(&rustgrid_notebook::write_ipynb(
+                &tab.to_notebook(None),
+            ))
+            .unwrap();
+            assert_eq!(again.cells.len(), 2, "no second loader cell");
+            assert_eq!(again.cells[0].id, loader_id, "the original loader is kept");
         }
 
         fn sql_tab() -> NotebookTab {
