@@ -892,37 +892,15 @@ impl AppView {
             return;
         };
 
-        // The statements as sent: only comments the engine accepts (`//`, `--x` on MySQL and an
-        // unclosed `/*` are not), so what the editor shows commented out never runs. MySQL is cut
-        // by RustGrid's own scanner (it knows `DELIMITER` and routine bodies); other engines by
-        // their driver's.
-        let statements: Vec<String> = if mysql {
-            sql_lex::split_script(&original, true)
-                .into_iter()
-                .map(|range| {
-                    sql_lex::prepare_for_server(&original[range], true)
-                        .trim()
-                        .to_string()
-                })
-                .filter(|statement| sql_lex::has_code(statement, true))
-                .collect()
-        } else {
-            connection.split_statements(&sql_lex::prepare_for_server(&original, false))
-        };
+        let (statements, skipped) = split_for_run(
+            &original,
+            &connection,
+            mysql,
+            self.max_statements_per_run as usize,
+        );
         if statements.is_empty() {
             return;
         }
-        // The statement limit runs the first statements and skips the rest, with a notice on the
-        // 信息 tab that links to the setting.
-        let mut statements = statements;
-        let limit = self.max_statements_per_run as usize;
-        let skipped = if limit > 0 && statements.len() > limit {
-            let skipped = statements.len() - limit;
-            statements.truncate(limit);
-            skipped
-        } else {
-            0
-        };
         let executable = statements.join(";\n");
         let stop_on_error = self.stop_on_error;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -956,8 +934,7 @@ impl AppView {
                     .spawn(async move { connection.script_session(database.as_deref()).await })
                     .await
             };
-            let mut outcomes: Vec<(String, std::time::Duration, Result<Vec<QueryResult>, Error>)> =
-                Vec::with_capacity(statements.len());
+            let mut outcomes: Vec<StatementOutcome> = Vec::with_capacity(statements.len());
             let mut session = super::runsql::ScriptSessionGuard {
                 runtime: runtime.clone(),
                 session: None,
@@ -980,49 +957,18 @@ impl AppView {
                     statements = Vec::new().into_iter();
                 }
             }
-            for statement in statements {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-                let begun = std::time::Instant::now();
-                let result = if let Some(active) = session.take() {
-                    let sql = statement.clone();
-                    match runtime
-                        .spawn(async move {
-                            let mut active = active;
-                            let result = active.execute_many(&sql).await;
-                            (result, active)
-                        })
-                        .await
-                    {
-                        Ok((result, returned)) => {
-                            session.restore(returned);
-                            result
-                        }
-                        Err(error) => Err(Error::other(error)),
-                    }
-                } else {
-                    let connection = connection.clone();
-                    let database = database.clone();
-                    let sql = statement.clone();
-                    match runtime
-                        .spawn(async move {
-                            connection
-                                .execute_query_many(database.as_deref(), &sql)
-                                .await
-                        })
-                        .await
-                    {
-                        Ok(result) => result,
-                        Err(error) => Err(Error::other(error)),
-                    }
-                };
-                let failed = result.is_err();
-                outcomes.push((statement, begun.elapsed(), result));
-                if failed && stop_on_error {
-                    break;
-                }
-            }
+            outcomes.extend(
+                run_statements(
+                    &runtime,
+                    &mut session,
+                    &connection,
+                    database.as_deref(),
+                    statements,
+                    &cancel,
+                    stop_on_error,
+                )
+                .await,
+            );
             drop(session);
             let elapsed = started.elapsed();
 
@@ -3334,6 +3280,112 @@ fn query_in_scope(file: &QueryFileInfo, schema: Option<&str>) -> bool {
     }
 }
 
+/// One executed statement: its text, how long it took and what it returned.
+pub(super) type StatementOutcome = (String, std::time::Duration, Result<Vec<QueryResult>, Error>);
+
+/// Split a script into the statements one run sends, then apply the per-run statement limit.
+/// Returns the statements to run and how many were skipped by the limit (`limit == 0` means no
+/// limit).
+///
+/// The statements as sent: only comments the engine accepts (`//`, `--x` on MySQL and an
+/// unclosed `/*` are not), so what the editor shows commented out never runs. MySQL is cut by
+/// RustGrid's own scanner (it knows `DELIMITER` and routine bodies); other engines by their
+/// driver's.
+pub(super) fn split_for_run(
+    source: &str,
+    connection: &Arc<dyn Connection>,
+    mysql: bool,
+    limit: usize,
+) -> (Vec<String>, usize) {
+    let mut statements: Vec<String> = if mysql {
+        sql_lex::split_script(source, true)
+            .into_iter()
+            .map(|range| {
+                sql_lex::prepare_for_server(&source[range], true)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|statement| sql_lex::has_code(statement, true))
+            .collect()
+    } else {
+        connection.split_statements(&sql_lex::prepare_for_server(source, false))
+    };
+    let skipped = apply_statement_limit(&mut statements, limit);
+    (statements, skipped)
+}
+
+/// The statement limit runs the first statements and skips the rest (the query tab shows a notice
+/// on its 信息 tab that links to the setting). Returns how many were dropped; `0` is no limit.
+fn apply_statement_limit(statements: &mut Vec<String>, limit: usize) -> usize {
+    if limit > 0 && statements.len() > limit {
+        let skipped = statements.len() - limit;
+        statements.truncate(limit);
+        skipped
+    } else {
+        0
+    }
+}
+
+/// Run `statements` one at a time: on the pinned `session` when it holds one (so `USE`/`SET`/
+/// `BEGIN` carry over), otherwise each on the pool through `execute_query_many`. Every database
+/// call runs on the Tokio `runtime`. Stops before the next statement once `cancel` is set, and
+/// after the first failure when `stop_on_error` is on.
+pub(super) async fn run_statements(
+    runtime: &Arc<Runtime>,
+    session: &mut super::runsql::ScriptSessionGuard,
+    connection: &Arc<dyn Connection>,
+    database: Option<&str>,
+    statements: impl IntoIterator<Item = String>,
+    cancel: &std::sync::atomic::AtomicBool,
+    stop_on_error: bool,
+) -> Vec<StatementOutcome> {
+    let mut outcomes = Vec::new();
+    for statement in statements {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        let begun = std::time::Instant::now();
+        let result = if let Some(active) = session.take() {
+            let sql = statement.clone();
+            match runtime
+                .spawn(async move {
+                    let mut active = active;
+                    let result = active.execute_many(&sql).await;
+                    (result, active)
+                })
+                .await
+            {
+                Ok((result, returned)) => {
+                    session.restore(returned);
+                    result
+                }
+                Err(error) => Err(Error::other(error)),
+            }
+        } else {
+            let connection = connection.clone();
+            let database = database.map(str::to_owned);
+            let sql = statement.clone();
+            match runtime
+                .spawn(async move {
+                    connection
+                        .execute_query_many(database.as_deref(), &sql)
+                        .await
+                })
+                .await
+            {
+                Ok(result) => result,
+                Err(error) => Err(Error::other(error)),
+            }
+        };
+        let failed = result.is_err();
+        outcomes.push((statement, begun.elapsed(), result));
+        if failed && stop_on_error {
+            break;
+        }
+    }
+    outcomes
+}
+
 /// Split a group-query script with the target connection's own scanner. MySQL/MariaDB uses the
 /// app's scanner (it understands `DELIMITER` and routine bodies); every other engine uses its
 /// driver's splitter. This is deliberately per target: a group may mix engines.
@@ -3612,4 +3664,30 @@ fn statement_at(
         .or(ranges.first())
         .map(|range| text[range.clone()].to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_statement_limit;
+
+    fn statements(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("select {i}")).collect()
+    }
+
+    #[test]
+    fn statement_limit_keeps_the_first_statements() {
+        let mut list = statements(5);
+        assert_eq!(apply_statement_limit(&mut list, 2), 3);
+        assert_eq!(list, vec!["select 0", "select 1"]);
+    }
+
+    #[test]
+    fn statement_limit_zero_or_not_reached_keeps_everything() {
+        let mut list = statements(3);
+        assert_eq!(apply_statement_limit(&mut list, 0), 0);
+        assert_eq!(list.len(), 3);
+        assert_eq!(apply_statement_limit(&mut list, 3), 0);
+        assert_eq!(apply_statement_limit(&mut list, 10), 0);
+        assert_eq!(list.len(), 3);
+    }
 }
