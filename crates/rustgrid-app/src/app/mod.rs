@@ -3245,6 +3245,7 @@ mod options_mcp;
 mod privilege_manager;
 mod query;
 mod query_editor;
+mod query_import;
 mod query_view;
 pub(crate) mod redis_lex;
 mod routine;

@@ -7,7 +7,9 @@
 //! its connection is selected and opened again. While a file is dragged over the window, a scrim
 //! shows where it will land; the overlay is one element with a short opacity animation, so the
 //! indicator costs nothing per mouse move. A Jupyter notebook (`.ipynb`) is the other: it opens
-//! in a notebook tab (`notebook.rs::open_notebook_path`).
+//! in a notebook tab (`notebook.rs::open_notebook_path`). A `.sql` script is copied into the
+//! Queries list's current scope (`query_import.rs`), or opened in an unsaved query tab when there
+//! is no scope to file it in.
 
 use std::path::{Path, PathBuf};
 
@@ -26,9 +28,18 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 /// What a dropped file should be opened as. This is the extension point for new drag-and-drop
 /// formats: add a variant, classify it below, and handle it in [`AppView::open_dropped_file`].
+#[derive(Debug, PartialEq, Eq)]
 enum DroppedFile {
     SqliteDatabase(PathBuf),
     Notebook(PathBuf),
+    SqlScript(PathBuf),
+}
+
+/// Whether `path` is named like an SQL script.
+fn has_sql_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sql"))
 }
 
 /// Whether `path` is named like a Jupyter notebook.
@@ -57,6 +68,9 @@ fn has_sqlite_extension(path: &Path) -> bool {
 fn classify_dropped_file(path: &Path) -> Option<DroppedFile> {
     if has_notebook_extension(path) && path.is_file() {
         return Some(DroppedFile::Notebook(path.to_path_buf()));
+    }
+    if has_sql_extension(path) && path.is_file() {
+        return Some(DroppedFile::SqlScript(path.to_path_buf()));
     }
     if is_sqlite_file(path) || has_sqlite_extension(path) {
         return Some(DroppedFile::SqliteDatabase(path.to_path_buf()));
@@ -157,38 +171,37 @@ impl AppView {
         }
     }
 
-    /// Open one classified dropped file. A new format adds its arm here and its classifier above.
-    fn open_dropped_file(&mut self, file: DroppedFile, cx: &mut Context<'_, Self>) {
-        match file {
-            DroppedFile::SqliteDatabase(path) => self.open_sqlite_file(path, cx),
-            DroppedFile::Notebook(path) => self.open_notebook_path(path, cx),
+    /// Open classified dropped files. A new format adds its arm here and its classifier above.
+    /// Scripts are imported together, so one drop of several `.sql` files is one import.
+    fn open_dropped_files(&mut self, files: Vec<DroppedFile>, cx: &mut Context<'_, Self>) {
+        let mut scripts = Vec::new();
+        for file in files {
+            match file {
+                DroppedFile::SqliteDatabase(path) => self.open_sqlite_file(path, cx),
+                DroppedFile::Notebook(path) => self.open_notebook_path(path, cx),
+                DroppedFile::SqlScript(path) => scripts.push(path),
+            }
+        }
+        if scripts.is_empty() {
+            return;
+        }
+        match self.query_import_target(cx) {
+            Some(target) => self.import_query_paths(scripts, target, cx),
+            None => self.open_sql_files_unsaved(scripts, cx),
         }
     }
 
-    /// Open a file RustGrid was launched with (or that another launch forwarded): a notebook opens
-    /// in a notebook tab, anything else is tried as a SQLite database.
+    /// Open a file RustGrid was launched with (or that another launch forwarded), exactly as if it
+    /// had been dropped on the window.
     pub(crate) fn open_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
-        if has_notebook_extension(&path) {
-            self.open_notebook_path(path, cx);
-        } else {
-            self.open_sqlite_path(path, cx);
-        }
-    }
-
-    /// Open a dropped (or command-line) SQLite file: reuse its connection when the file is already
-    /// configured, otherwise add and connect a new one named after the file. Command-line paths
-    /// have not been classified, so they are checked here; a dropped file already passed
-    /// [`classify_dropped_file`] and must not be rejected again by the header check.
-    pub(crate) fn open_sqlite_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
-        if !is_sqlite_file(&path) {
-            self.toast(
+        match classify_dropped_file(&path) {
+            Some(file) => self.open_dropped_files(vec![file], cx),
+            None => self.toast(
                 ToastKind::Error,
                 t!("file_drop.unsupported").to_string(),
                 cx,
-            );
-            return;
+            ),
         }
-        self.open_sqlite_file(path, cx);
     }
 
     /// Open a file already known to be a SQLite database.
@@ -388,9 +401,7 @@ impl AppView {
             );
             return;
         }
-        for file in files {
-            self.open_dropped_file(file, cx);
-        }
+        self.open_dropped_files(files, cx);
     }
 
     /// The drag indicator: the window dims and a dashed drop target names the action. The frame is
@@ -488,6 +499,32 @@ mod tests {
         let file = dir.join("sample.data");
         std::fs::write(&file, SQLITE_HEADER).unwrap();
         assert!(is_sqlite_file(&file));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_dropped_sql_script_is_classified_by_extension() {
+        let dir =
+            std::env::temp_dir().join(format!("rustgrid-sql-drop-{}", crate::form::now_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["report.sql", "REPORT.SQL"] {
+            let file = dir.join(name);
+            std::fs::write(&file, b"select 1").unwrap();
+            assert_eq!(
+                classify_dropped_file(&file),
+                Some(DroppedFile::SqlScript(file))
+            );
+        }
+        let unknown = dir.join("notes.txt");
+        std::fs::write(&unknown, b"select 1").unwrap();
+        assert_eq!(classify_dropped_file(&unknown), None);
+        // A SQLite database is still a database, whatever else is dropped with it.
+        let database = dir.join("data.sqlite");
+        std::fs::write(&database, SQLITE_HEADER).unwrap();
+        assert_eq!(
+            classify_dropped_file(&database),
+            Some(DroppedFile::SqliteDatabase(database))
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

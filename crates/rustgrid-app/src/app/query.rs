@@ -142,7 +142,7 @@ impl AppView {
 
     /// The group selected in the connection tree, when the selection is exactly that group row
     /// (a plain click replaces the selection, so no connection row is included).
-    fn single_selected_group(&self, cx: &App) -> Option<u64> {
+    pub(super) fn single_selected_group(&self, cx: &App) -> Option<u64> {
         let items = self.tree_selection.items();
         if items.len() == 1 {
             return items[0].strip_prefix("group-")?.parse().ok();
@@ -2856,7 +2856,7 @@ impl AppView {
 
     /// The parent group of the connection row selected in the tree, if any. Used to show a group's
     /// saved queries when one of its connections (rather than the group row) is selected.
-    fn selected_connection_group(&self, cx: &App) -> Option<u64> {
+    pub(super) fn selected_connection_group(&self, cx: &App) -> Option<u64> {
         let selected = self.tree_pane.read(cx).selected.clone()?;
         let index = selected.strip_prefix("conn-")?.parse::<usize>().ok()?;
         let connection_id = self.connections.get(index)?.profile.id.clone();
@@ -3349,6 +3349,22 @@ impl AppView {
     pub(super) fn reveal_query(&mut self, index: usize) {
         if let Some(file) = self.query_files.get(index) {
             reveal_in_file_manager(&file.path);
+        }
+    }
+
+    /// The toolbar's Show in Folder: the selected query's file (the first of a multi-selection),
+    /// otherwise the current scope's folder.
+    pub(super) fn reveal_selected_query(&mut self, cx: &mut Context<'_, Self>) {
+        match self.selected_query_indices(cx).first() {
+            Some(&index) => self.reveal_query(index),
+            None => self.reveal_query_folder(cx),
+        }
+    }
+
+    /// Put a query file's full path on the clipboard.
+    pub(super) fn copy_query_path(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if let Some(file) = self.query_files.get(index) {
+            cx.write_to_clipboard(ClipboardItem::new_string(file.path.display().to_string()));
         }
     }
 

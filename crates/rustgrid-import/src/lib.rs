@@ -152,7 +152,7 @@ fn detect_delimiter(text: &str) -> u8 {
 
 /// Decode file bytes as UTF-8, falling back to GB18030 so legacy Chinese CSV/TXT files stay
 /// readable. A UTF-8 BOM is stripped.
-fn decode_text(bytes: &[u8]) -> String {
+pub fn decode_text(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),

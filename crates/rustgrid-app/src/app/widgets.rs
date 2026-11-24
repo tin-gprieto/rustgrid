@@ -1390,6 +1390,15 @@ impl AppView {
                             cx.notify();
                         }),
                     ))
+                    .child(self.context_item(
+                        "queryfile-ctx-copy-path",
+                        t!("query.copy_path").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.copy_query_path(index, cx);
+                            cx.notify();
+                        }),
+                    ))
                     .child(div().h(px(1.0)).my_1().bg(rgb(theme.border)))
                     .child(self.context_item(
                         "queryfile-ctx-refresh",
@@ -1508,6 +1517,14 @@ impl AppView {
                         cx.listener(|this, _event, _window, cx| {
                             this.context_menu = None;
                             this.open_new_query(cx);
+                        }),
+                    ))
+                    .child(self.context_item(
+                        "querylist-ctx-import",
+                        t!("query.import").to_string(),
+                        cx.listener(|this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.import_query_files_dialog(cx);
                         }),
                     ))
                     .child(div().h(px(1.0)).my_1().bg(rgb(theme.border)))

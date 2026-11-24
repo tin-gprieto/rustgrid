@@ -1311,6 +1311,8 @@ impl AppView {
             selected,
             theme,
         )
+        // Where the query lives on disk.
+        .tooltip(ui::text_tooltip(file.path.display().to_string()))
         .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
             this.hit_query(&click_key, event.click_count(), event.modifiers(), cx);
             if this.click_opens(event.click_count(), event.modifiers()) {
@@ -1446,6 +1448,7 @@ impl AppView {
             theme,
             width,
         )
+        .tooltip(ui::text_tooltip(file.path.display().to_string()))
         .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
             this.hit_query(&click_key, event.click_count(), event.modifiers(), cx);
             if this.click_opens(event.click_count(), event.modifiers()) {

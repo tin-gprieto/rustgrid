@@ -5086,13 +5086,57 @@ pub(super) fn reveal_in_file_manager(path: &std::path::Path) {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let target = path.parent().unwrap_or(path);
-        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+        // The freedesktop file-manager interface (Nautilus, Dolphin, Nemo, Thunar, ...) opens the
+        // folder with the item selected. `gdbus` ships with GLib, so no new dependency; it runs on
+        // its own thread because the call waits for the file manager. Without it, the folder
+        // opens with nothing selected.
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        std::thread::spawn(move || {
+            let shown = std::process::Command::new("gdbus")
+                .args([
+                    "call",
+                    "--session",
+                    "--timeout",
+                    "3",
+                    "--dest",
+                    "org.freedesktop.FileManager1",
+                    "--object-path",
+                    "/org/freedesktop/FileManager1",
+                    "--method",
+                    "org.freedesktop.FileManager1.ShowItems",
+                ])
+                .arg(format!("['{}']", file_uri(&path)))
+                .arg("")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !shown {
+                let target = path.parent().unwrap_or(&path);
+                let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            }
+        });
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
     {
         let _ = path;
     }
+}
+
+/// A `file://` URI for an absolute path. Every byte outside the URI's unreserved set and `/` is
+/// percent-encoded, so the result is also safe inside a single-quoted GVariant string.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
 }
 
 /// Open `path` with the OS default application (the Extract window's 打开 button).
@@ -5195,5 +5239,16 @@ mod log_selection_tests {
                 "log text should be selectable"
             );
         });
+    }
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod file_uri_tests {
+    #[test]
+    fn file_uri_percent_encodes_everything_but_plain_path_bytes() {
+        assert_eq!(
+            super::file_uri(std::path::Path::new("/home/u/my q's/ñ.sql")),
+            "file:///home/u/my%20q%27s/%C3%B1.sql"
+        );
     }
 }

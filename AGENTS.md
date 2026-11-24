@@ -234,7 +234,7 @@ not a later refactor.
   tests; the rest are `impl AppView` submodules: `tree`, `database`, `db_dialog`, `objects`,
   `sidebar`, `tabs`, `toolbar`, `query`, `query_view`, `query_editor`, `grid`, `grid_input`,
   `grid_commit`, `grid_view`, `grid_cell`, `grid_scroll`, `grid_toolbar`, `dialogs`,
-  `export`, `import`, `routine`, `routine_view`, `view`, `view_view`, `notebook`, `notebook_view`,
+  `export`, `import`, `query_import`, `routine`, `routine_view`, `view`, `view_view`, `notebook`, `notebook_view`,
   `widgets`, `form`). New view code goes in the matching submodule, **not** `mod.rs`.
   `ui/` is the internal design system (buttons, scrollbars, text fields, dropdowns, ...) and the
   wrapper layer over gpui-kit: put shared chrome there, never one-off `div`s in feature code. Several subtrees are child
@@ -846,8 +846,11 @@ shadcn chrome described above. Implemented today:
    the tab bar itself (or during its entity update) would borrow it a second time. The tab context
    menu's 关闭右侧 closes every tab to the right of the clicked one.
    Dragging a file onto the window (or onto `RustGrid.exe`, which forwards it to the running
-   instance) opens it through the generic drop frame in `app/file_drop.rs`; SQLite is the only
-   recognised format today, and `classify_dropped_file` is the extension point for the next one.
+   instance) opens it through the generic drop frame in `app/file_drop.rs`, and so does a path
+   given on the command line (`open_path` runs the same classifier). `classify_dropped_file`
+   recognises SQLite databases, `.ipynb` notebooks and `.sql` scripts and is the extension point
+   for the next format. A `.sql` is imported into the Queries list's current scope (see item 7),
+   or opened in an unsaved query tab when nothing is selected that could file it.
 2. Enumerate databases; create/edit/delete a database (charset + collation) and edit defaults
 3. Per database, list tables and views
 4. Show a selected table's data in a grid with **pagination** — display only, **no editing** yet
@@ -886,8 +889,16 @@ shadcn chrome described above. Implemented today:
    to sort). The list is scoped by the connection tree's selection — a selected database shows only
    that database's queries, a selected connection shows all of its databases, and any other
    selection shows every saved query. Rows open with a double-click and are deleted through the
-   shared confirm dialog. They persist in the config dir's `queries.json` (`SavedQuery`, keyed by
-   connection profile id + database name).
+   shared confirm dialog. They persist as loose `.sql` files under the config dir's `queries/`
+   (`<connection id>/<database>/[<schema>/]<name>.sql`, group queries under `_groups/<group id>/`;
+   `ConfigStore::query_file_path`). The toolbar's **Show in Folder** reveals the selected file (or
+   the scope's folder); on Linux `reveal_in_file_manager` asks the file manager to select it
+   through `org.freedesktop.FileManager1.ShowItems` (`gdbus`, no new dependency) and falls back to
+   opening the folder. A row's tooltip is its full path and its menu has **Copy Path**.
+   **Import…** (toolbar and the list's blank-area menu, `app/query_import.rs`) copies picked
+   `.sql` files into the current scope — UTF-8 with the Import Wizard's GB18030 fallback
+   (`rustgrid_import::decode_text`), never over an existing query (` (2)`, ` (3)` suffixes), and
+   refusing files over 10 MB (that is Run SQL File's job).
 8. Table export wizard: with a table selected, **Export Wizard** (object toolbar / table context
    menu) opens a separate OS window walking four pages — P1 format (`.xlsx`/`.csv`/`.sql`/`.txt`),
    P2 tables + output paths (native folder/file dialogs via `rfd`, defaulting to the desktop),

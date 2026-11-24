@@ -747,6 +747,22 @@ impl AppView {
                         cx.listener(|this, _event, _window, cx| {
                             this.refresh_query_files_feedback(cx)
                         }),
+                    ))
+                    .child(toolbar_separator(theme))
+                    .child(self.toolbar_item(
+                        "obj-import-query",
+                        "icons/import.svg",
+                        t!("query.import").to_string(),
+                        self.query_import_target(cx).is_some(),
+                        cx.listener(|this, _event, _window, cx| this.import_query_files_dialog(cx)),
+                    ))
+                    .child(toolbar_separator(theme))
+                    .child(self.toolbar_item(
+                        "obj-reveal-query",
+                        "icons/folder.svg",
+                        t!("backup.reveal").to_string(),
+                        self.query_list_active(cx),
+                        cx.listener(|this, _event, _window, cx| this.reveal_selected_query(cx)),
                     )),
             )
             .child(self.render_object_view_controls(Category::Queries, cx))
