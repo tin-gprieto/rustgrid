@@ -930,19 +930,33 @@ impl NotebookTab {
     /// Insert at `index` (clamped to the end) and select the new cell.
     pub fn insert_cell(&mut self, index: usize, cell: rustgrid_notebook::Cell) {
         let index = index.min(self.cells.len());
-        self.cells.insert(index, NotebookCellState::new(cell));
+        let markdown = cell.kind == rustgrid_notebook::CellKind::Markdown;
+        let mut state = NotebookCellState::new(cell);
+        // A new Markdown cell opens in its editor: there is nothing to render yet.
+        state.editing = markdown;
+        self.cells.insert(index, state);
+        if let Some(running) = self.running.as_mut()
+            && *running >= index
+        {
+            *running += 1;
+        }
         self.selected = index;
         self.dirty = true;
     }
 
     /// Remove the cell at `index`. Returns the ids of the removed cell's result grids, which the
-    /// caller must drop from `AppView::grids`.
+    /// caller must drop from `AppView::grids`. The running cell cannot be removed.
     #[must_use]
     pub fn remove_cell(&mut self, index: usize) -> Vec<u64> {
-        if index >= self.cells.len() {
+        if index >= self.cells.len() || self.running == Some(index) {
             return Vec::new();
         }
         let removed = self.cells.remove(index);
+        if let Some(running) = self.running.as_mut()
+            && *running > index
+        {
+            *running -= 1;
+        }
         if index < self.selected {
             self.selected -= 1;
         }
@@ -1004,8 +1018,72 @@ impl NotebookTab {
         }
         let state = self.cells.remove(from);
         self.cells.insert(to, state);
+        // The running cell keeps pointing at the same cell.
+        if let Some(running) = self.running.as_mut() {
+            if *running == from {
+                *running = to;
+            } else if from < *running && *running <= to {
+                *running -= 1;
+            } else if to <= *running && *running < from {
+                *running += 1;
+            }
+        }
         self.selected = to;
         self.dirty = true;
+    }
+
+    /// Turn the cell at `index` into an SQL or Markdown cell. Its outputs and execution count go
+    /// (they belonged to the other kind); the ids of its result grids are returned for the caller
+    /// to drop. A Raw cell, the running cell and a no-op change are left alone.
+    #[must_use]
+    pub fn set_cell_kind(&mut self, index: usize, kind: rustgrid_notebook::CellKind) -> Vec<u64> {
+        use rustgrid_notebook::CellKind;
+        if kind == CellKind::Raw || self.running == Some(index) {
+            return Vec::new();
+        }
+        let Some(state) = self.cells.get_mut(index) else {
+            return Vec::new();
+        };
+        if state.cell.kind == kind || state.cell.kind == CellKind::Raw {
+            return Vec::new();
+        }
+        state.cell.kind = kind;
+        state.cell.magic_args.clear();
+        state.cell.outputs.clear();
+        state.cell.execution_count = None;
+        state.error = None;
+        state.elapsed = None;
+        state.editing = kind == CellKind::Markdown;
+        self.dirty = true;
+        std::mem::take(&mut state.result_grids)
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    /// Show the Markdown cell at `index` as its editor (`true`) or rendered (`false`).
+    pub fn set_markdown_editing(&mut self, index: usize, editing: bool) {
+        if let Some(state) = self.cells.get_mut(index)
+            && state.cell.kind == rustgrid_notebook::CellKind::Markdown
+        {
+            state.editing = editing;
+        }
+    }
+
+    /// Select the cell at `index`. Leaving a Markdown cell that is being edited renders it again
+    /// (an empty one stays in its editor). Returns whether anything changed.
+    pub fn select_cell(&mut self, index: usize) -> bool {
+        if index >= self.cells.len() || index == self.selected {
+            return false;
+        }
+        if let Some(previous) = self.cells.get_mut(self.selected)
+            && previous.editing
+            && !previous.cell.source.trim().is_empty()
+        {
+            previous.editing = false;
+        }
+        self.selected = index;
+        true
     }
 
     /// Mark the cell `cell_id` as running and return the run's generation and cancel flag. The
@@ -2258,6 +2336,84 @@ mod tests {
             tab.set_cell_source_by_id(&id, "select 10");
             assert!(tab.dirty);
             assert_eq!(tab.cells[0].cell.source, "select 10");
+        }
+
+        #[test]
+        fn running_cell_follows_inserts_moves_and_removals() {
+            let mut tab = sql_tab();
+            tab.insert_cell(2, rustgrid_notebook::Cell::new_sql("select 3"));
+            let id = tab.cells[1].cell.id.clone();
+            tab.begin_run(&id).unwrap();
+            assert_eq!(tab.running, Some(1));
+
+            tab.insert_cell(0, rustgrid_notebook::Cell::new_sql("first"));
+            assert_eq!(tab.running, Some(2));
+            tab.move_cell(2, 0);
+            assert_eq!(tab.running, Some(0));
+            tab.move_cell(1, 3);
+            assert_eq!(tab.running, Some(0));
+            tab.move_cell(3, 0);
+            assert_eq!(tab.running, Some(1));
+            assert_eq!(tab.cells[1].cell.id, id);
+
+            // The running cell cannot be removed; removing one above it shifts it.
+            assert!(tab.remove_cell(1).is_empty());
+            assert_eq!(tab.cells.len(), 4);
+            let _ = tab.remove_cell(0);
+            assert_eq!(tab.running, Some(0));
+            assert_eq!(tab.cells[0].cell.id, id);
+        }
+
+        #[test]
+        fn changing_a_cell_kind_drops_its_results() {
+            use rustgrid_notebook::CellKind;
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            let (generation, _) = tab.begin_run(&id).unwrap();
+            // The running cell keeps its kind.
+            assert!(tab.set_cell_kind(0, CellKind::Markdown).is_empty());
+            assert_eq!(tab.cells[0].cell.kind, CellKind::Sql);
+            assert!(tab.finish_run(
+                &id,
+                generation,
+                std::time::Duration::ZERO,
+                &[result_set()],
+                None,
+                100
+            ));
+            let _ = tab.replace_result_grids(&id, vec![Some(9)]);
+            tab.dirty = false;
+
+            assert_eq!(tab.set_cell_kind(0, CellKind::Markdown), vec![9]);
+            let state = &tab.cells[0];
+            assert_eq!(state.cell.kind, CellKind::Markdown);
+            assert!(state.cell.outputs.is_empty());
+            assert_eq!(state.cell.execution_count, None);
+            assert!(state.editing);
+            assert!(tab.dirty);
+            // Same kind or Raw: nothing happens.
+            assert!(tab.set_cell_kind(0, CellKind::Markdown).is_empty());
+            assert!(tab.set_cell_kind(0, CellKind::Raw).is_empty());
+            assert!(tab.set_cell_kind(0, CellKind::Sql).is_empty());
+            assert_eq!(tab.cells[0].cell.kind, CellKind::Sql);
+        }
+
+        #[test]
+        fn leaving_a_markdown_cell_renders_it() {
+            let mut tab = sql_tab();
+            tab.insert_cell(1, rustgrid_notebook::Cell::new_markdown(""));
+            assert!(tab.cells[1].editing);
+            assert_eq!(tab.selected, 1);
+            // Empty: stays in its editor.
+            assert!(tab.select_cell(0));
+            assert!(tab.cells[1].editing);
+            assert!(tab.select_cell(1));
+            let id = tab.cells[1].cell.id.clone();
+            tab.set_cell_source_by_id(&id, "# Title");
+            assert!(tab.select_cell(2));
+            assert!(!tab.cells[1].editing);
+            assert!(!tab.select_cell(2));
+            assert!(!tab.select_cell(9));
         }
 
         #[test]
