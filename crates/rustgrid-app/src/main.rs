@@ -110,6 +110,7 @@ fn main() {
                     ..TitleBar::title_bar_options()
                 }),
                 app_owns_titlebar_drag: true,
+                app_id: Some(app::APP_ID.to_string()),
                 ..Default::default()
             },
             cx,

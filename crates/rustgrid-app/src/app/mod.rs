@@ -3245,6 +3245,7 @@ mod toolbar;
 mod transfer;
 mod tree;
 mod ui;
+pub(crate) use ui::APP_ID;
 mod update;
 mod user;
 mod user_create;

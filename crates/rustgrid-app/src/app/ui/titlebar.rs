@@ -20,6 +20,11 @@ use crate::theme::Theme;
 /// A title bar's optional close handler (Linux only; Windows and macOS use the native close path).
 type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
+/// The window's application id (Wayland `app_id`, X11 `WM_CLASS`). Linux desktops match it to the
+/// launcher's `StartupWMClass` (see `tools/install-desktop-entry.sh`) to show the app's icon and
+/// group its windows; without it the dock shows a generic icon.
+pub(crate) const APP_ID: &str = "RustGrid";
+
 /// The options shared by every app-owned window title bar.
 ///
 /// `TitleBar::window_options` sets `app_owns_titlebar_drag`, which macOS needs so AppKit neither
@@ -31,6 +36,7 @@ pub(crate) fn window_options(title: impl Into<SharedString>) -> WindowOptions {
         title: Some(title.into()),
         ..TitleBar::title_bar_options()
     });
+    options.app_id = Some(APP_ID.to_string());
     options
 }
 
@@ -105,5 +111,6 @@ mod tests {
             titlebar.title.map(|title| title.to_string()),
             Some("Test Window".to_string())
         );
+        assert_eq!(options.app_id.as_deref(), Some(APP_ID));
     }
 }

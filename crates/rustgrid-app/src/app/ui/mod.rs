@@ -28,7 +28,9 @@ pub(crate) use combo::{ComboBox, ComboOption};
 pub(crate) use sql_editor::{SqlEditor, SqlEditorOptions, syntax_style};
 pub(crate) use text_area::{TextArea, TextAreaOptions};
 pub(crate) use text_input::{TextInput, TextInputOptions};
-pub(crate) use titlebar::{action_cluster, bar_title, title_bar, window_options, window_title_bar};
+pub(crate) use titlebar::{
+    APP_ID, action_cluster, bar_title, title_bar, window_options, window_title_bar,
+};
 pub(super) use views::{
     ColumnGrid, DETAIL_BADGE_SIZE, DetailColumns, DetailList, DetailScroll, DetailSort, SortKey,
     ViewMode, approx_text_width, detail_cell_text, detail_column_width, detail_content_width,
