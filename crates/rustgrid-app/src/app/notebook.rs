@@ -323,6 +323,45 @@ impl AppView {
         cx.notify();
     }
 
+    /// Insert a new cell of `kind` under the selected one and select it.
+    pub(super) fn add_notebook_cell(
+        &mut self,
+        index: usize,
+        kind: rustgrid_notebook::CellKind,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let cell = match kind {
+            rustgrid_notebook::CellKind::Markdown => rustgrid_notebook::Cell::new_markdown(""),
+            _ => rustgrid_notebook::Cell::new_sql(""),
+        };
+        let at = if tab.cells.is_empty() {
+            0
+        } else {
+            tab.selected + 1
+        };
+        tab.insert_cell(at, cell);
+        cx.notify();
+    }
+
+    /// Select the cell at `cell` of the notebook at `index`.
+    pub(super) fn select_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(tab) = self.notebooks.get_mut(index)
+            && cell < tab.cells.len()
+            && tab.selected != cell
+        {
+            tab.selected = cell;
+            cx.notify();
+        }
+    }
+
     /// The connection at `connection_index` is being closed: every notebook bound to it loses its
     /// session and result grids (they would hold a dead connection), but stays open.
     pub(super) fn release_connection_notebooks(

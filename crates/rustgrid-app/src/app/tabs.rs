@@ -174,6 +174,8 @@ impl AppView {
                         d.flex().flex_col().flex_1().min_w(px(0.0)).min_h(px(0.0))
                     }))
                     .into_any_element()
+            } else if let Some(index) = self.active_notebook {
+                self.render_notebook_view(index, cx).into_any_element()
             } else if let Some(index) = self.active_query {
                 self.render_query_view(index, window, cx).into_any_element()
             } else if let Some(grid) = self.active_grid.and_then(|index| self.grids.get(index)) {

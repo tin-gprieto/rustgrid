@@ -3190,6 +3190,7 @@ mod keymap;
 pub(crate) mod line_edit;
 mod list_ops;
 mod notebook;
+mod notebook_view;
 mod objects;
 mod options;
 mod options_mcp;
