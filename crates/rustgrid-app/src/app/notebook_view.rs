@@ -243,6 +243,33 @@ impl AppView {
         let body: AnyElement = if show_editor {
             match self.ensure_notebook_editor(index, &cell.id, cx) {
                 Some(editor) => div()
+                    // The notebook's Enter/Escape commands, scoped to this cell (see
+                    // `NOTEBOOK_INPUT_CONTEXT`). An unhandled key keeps propagating to the editor.
+                    .key_context(NOTEBOOK_CONTEXT)
+                    .on_action(cx.listener(move |this, _: &NotebookRunCell, _window, cx| {
+                        if this.notebook_key_run(index, cell_index, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_action(
+                        cx.listener(move |this, _: &NotebookRunAdvance, window, cx| {
+                            if this.notebook_key_run_advance(index, cell_index, window, cx) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
+                    .on_action(cx.listener(move |this, _: &NotebookRunInsert, window, cx| {
+                        if this.notebook_key_run_insert(index, cell_index, window, cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_action(
+                        cx.listener(move |this, _: &NotebookLeaveEdit, _window, cx| {
+                            if this.notebook_key_leave_edit(index, cell_index, cx) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
                     .flex()
                     .flex_col()
                     .h(editor_height(&cell.source, self.editor_font_size()))

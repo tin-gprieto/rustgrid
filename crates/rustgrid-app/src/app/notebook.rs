@@ -248,6 +248,139 @@ impl AppView {
         Some(editor)
     }
 
+    /// "Run" a cell from the keyboard: an SQL cell runs, a Markdown cell leaves its editor and
+    /// renders (as in Jupyter). Returns whether there was such a cell.
+    fn run_or_render_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return false;
+        };
+        let Some(state) = tab.cells.get(cell) else {
+            return false;
+        };
+        let tab_id = tab.id;
+        let cell_id = state.cell.id.clone();
+        match state.cell.kind {
+            rustgrid_notebook::CellKind::Sql => {
+                self.run_notebook_cell(tab_id, &cell_id, cx);
+            }
+            rustgrid_notebook::CellKind::Markdown => {
+                // Pick up the editor's last keystroke before deciding whether it can render.
+                if let Some(editor) = self.notebook_editors.get(&(tab_id, cell_id.clone())) {
+                    let text = editor.read(cx).live_text(cx);
+                    tab.set_cell_source_by_id(&cell_id, &text);
+                }
+                tab.set_markdown_editing(cell, false);
+            }
+            rustgrid_notebook::CellKind::Raw => {}
+        }
+        cx.notify();
+        true
+    }
+
+    /// Select the cell at `cell` and put the keyboard in its editor (SQL, or a Markdown cell being
+    /// edited); a rendered cell is only selected.
+    fn focus_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        tab.select_cell(cell);
+        let Some(state) = tab.cells.get(cell) else {
+            return;
+        };
+        let has_editor = match state.cell.kind {
+            rustgrid_notebook::CellKind::Sql => true,
+            rustgrid_notebook::CellKind::Markdown => state.editing,
+            rustgrid_notebook::CellKind::Raw => false,
+        };
+        let cell_id = state.cell.id.clone();
+        if has_editor && let Some(editor) = self.ensure_notebook_editor(index, &cell_id, cx) {
+            editor.update(cx, |editor, cx| editor.focus_when_ready(window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Ctrl+Enter: run (or render) the cell and stay on it.
+    pub(super) fn notebook_key_run(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        self.run_or_render_notebook_cell(index, cell, cx)
+    }
+
+    /// Shift+Enter: run (or render) the cell and move to the next one, adding an SQL cell when it
+    /// was the last.
+    pub(super) fn notebook_key_run_advance(
+        &mut self,
+        index: usize,
+        cell: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        if !self.run_or_render_notebook_cell(index, cell, cx) {
+            return false;
+        }
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return true;
+        };
+        if cell + 1 >= tab.cells.len() {
+            tab.insert_cell(cell + 1, rustgrid_notebook::Cell::new_sql(""));
+        }
+        self.focus_notebook_cell(index, cell + 1, window, cx);
+        true
+    }
+
+    /// Alt+Enter: run (or render) the cell and insert a new SQL cell under it.
+    pub(super) fn notebook_key_run_insert(
+        &mut self,
+        index: usize,
+        cell: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        if !self.run_or_render_notebook_cell(index, cell, cx) {
+            return false;
+        }
+        if let Some(tab) = self.notebooks.get_mut(index) {
+            tab.insert_cell(cell + 1, rustgrid_notebook::Cell::new_sql(""));
+        }
+        self.focus_notebook_cell(index, cell + 1, window, cx);
+        true
+    }
+
+    /// Escape: leave a Markdown cell's editor (it renders). Anywhere else the key is left to the
+    /// editor (it closes the completion popup), so this returns `false`.
+    pub(super) fn notebook_key_leave_edit(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let editing_markdown = self
+            .notebooks
+            .get(index)
+            .and_then(|tab| tab.cells.get(cell))
+            .is_some_and(|state| {
+                state.cell.kind == rustgrid_notebook::CellKind::Markdown && state.editing
+            });
+        if editing_markdown {
+            self.run_or_render_notebook_cell(index, cell, cx);
+        }
+        editing_markdown
+    }
+
     /// Run the selected cell of the notebook at `index`.
     pub(super) fn run_selected_notebook_cell(&mut self, index: usize, cx: &mut Context<'_, Self>) {
         let Some(tab) = self.notebooks.get(index) else {

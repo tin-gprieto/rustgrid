@@ -137,6 +137,19 @@ gpui::actions!(
     ]
 );
 
+// Notebook cell actions (Jupyter's keys): run the cell, run and move to the next one, run and
+// insert a cell below, and leave a Markdown cell's editor. Handled on each cell's editor wrapper,
+// so they act on the cell being typed in.
+gpui::actions!(
+    notebook,
+    [
+        NotebookRunCell,
+        NotebookRunAdvance,
+        NotebookRunInsert,
+        NotebookLeaveEdit
+    ]
+);
+
 // Workspace-wide commands, handled on the main window's root (`WORKSPACE_CONTEXT`), so they work
 // from any pane.
 gpui::actions!(
@@ -312,6 +325,13 @@ const QUERY_EDITOR_CONTEXT: &str = "QueryEditor";
 /// The editor's own `Input` context as seen from the query editor, for key bindings that must tie
 /// with the kit's text-input bindings and outrank them (later bindings win at equal depth).
 const QUERY_EDITOR_INPUT_CONTEXT: &str = "QueryEditor > Input";
+
+/// Key context of a notebook cell's editor wrapper (`notebook_view.rs`).
+const NOTEBOOK_CONTEXT: &str = "Notebook";
+
+/// The cell editor's own `Input` inside [`NOTEBOOK_CONTEXT`]: the notebook's Enter/Escape commands
+/// are bound here so they outrank the kit's text-input bindings for the same keys.
+const NOTEBOOK_INPUT_CONTEXT: &str = "Notebook > Input";
 
 /// The stable settings key for the Queries tab's remembered list layout.
 pub(super) const VIEW_PAGE_QUERIES: &str = "queries";

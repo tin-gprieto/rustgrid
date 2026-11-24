@@ -25,16 +25,17 @@ use super::{
     GRID_CONTEXT, GRID_STATUS_CONTEXT, GridDuplicateRow, GridEditValue, GridFirstCell,
     GridInsertRow, GridLastCell, GridNextCell, GridPageDown, GridPageUp, GridPrevCell, GridRefresh,
     GridRowEnd, GridRowStart, GridSelectPageDown, GridSelectPageUp, MoveLinesDown, MoveLinesUp,
-    NewQueryTab, NextTab, OBJECT_LIST_CONTEXT, ObjectDown, ObjectEnd, ObjectFocusSearch,
-    ObjectHome, ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp, ObjectRename, ObjectRight,
-    ObjectSelectAll, ObjectUp, OpenTransferConfig, PAGE_CONTEXT, PasteBackupFile, PasteQueryFile,
-    PrevTab, QUERY_EDITOR_CONTEXT, QUERY_LIST_CONTEXT, QueryFocusSearch, ROW_FORM_CONTEXT,
-    RefreshPage, RenameBackupFile, RenameQueryFile, RunQuery, RunSelectedQuery, SaveDesign,
-    SaveQuery, SaveRowForm, SelectAllBackups, SelectAllOccurrences, SelectAllQueries,
-    SelectAllStatusSql, SelectAllTransfers, SwapLineUp, TRANSFER_LIST_CONTEXT, TREE_CONTEXT,
-    ToggleComment, TreeCollapse, TreeDown, TreeEnd, TreeExpand, TreeFocusSearch, TreeHome,
-    TreeOpen, TreePageDown, TreePageUp, TreeRename, TreeSelectAll, TreeUp, USER_LIST_CONTEXT,
-    UserFocusSearch, WORKSPACE_CONTEXT,
+    NOTEBOOK_INPUT_CONTEXT, NewQueryTab, NextTab, NotebookLeaveEdit, NotebookRunAdvance,
+    NotebookRunCell, NotebookRunInsert, OBJECT_LIST_CONTEXT, ObjectDown, ObjectEnd,
+    ObjectFocusSearch, ObjectHome, ObjectLeft, ObjectOpen, ObjectPageDown, ObjectPageUp,
+    ObjectRename, ObjectRight, ObjectSelectAll, ObjectUp, OpenTransferConfig, PAGE_CONTEXT,
+    PasteBackupFile, PasteQueryFile, PrevTab, QUERY_EDITOR_CONTEXT, QUERY_LIST_CONTEXT,
+    QueryFocusSearch, ROW_FORM_CONTEXT, RefreshPage, RenameBackupFile, RenameQueryFile, RunQuery,
+    RunSelectedQuery, SaveDesign, SaveQuery, SaveRowForm, SelectAllBackups, SelectAllOccurrences,
+    SelectAllQueries, SelectAllStatusSql, SelectAllTransfers, SwapLineUp, TRANSFER_LIST_CONTEXT,
+    TREE_CONTEXT, ToggleComment, TreeCollapse, TreeDown, TreeEnd, TreeExpand, TreeFocusSearch,
+    TreeHome, TreeOpen, TreePageDown, TreePageUp, TreeRename, TreeSelectAll, TreeUp,
+    USER_LIST_CONTEXT, UserFocusSearch, WORKSPACE_CONTEXT,
 };
 
 /// Where a command lives, for grouping the 快捷键 page.
@@ -45,17 +46,19 @@ pub(super) enum CommandGroup {
     ObjectList,
     TableGrid,
     QueryEditor,
+    Notebook,
     Designer,
     Lists,
 }
 
 impl CommandGroup {
-    pub(super) const ALL: [CommandGroup; 7] = [
+    pub(super) const ALL: [CommandGroup; 8] = [
         CommandGroup::General,
         CommandGroup::ConnectionTree,
         CommandGroup::ObjectList,
         CommandGroup::TableGrid,
         CommandGroup::QueryEditor,
+        CommandGroup::Notebook,
         CommandGroup::Designer,
         CommandGroup::Lists,
     ];
@@ -68,6 +71,7 @@ impl CommandGroup {
             CommandGroup::ConnectionTree => "keymap.group.tree",
             CommandGroup::ObjectList => "keymap.group.objects",
             CommandGroup::QueryEditor => "keymap.group.query_editor",
+            CommandGroup::Notebook => "keymap.group.notebook",
             CommandGroup::Designer => "keymap.group.designer",
             CommandGroup::Lists => "keymap.group.lists",
         }
@@ -733,6 +737,40 @@ pub(super) const COMMANDS: &[Command] = &[
         mac_defaults: None,
         bind: bind!(SelectAllStatusSql),
     },
+    // Notebook cells. The kit's text input binds Enter / Shift+Enter / Ctrl+Enter / Escape
+    // itself, so these live one level deeper (`Notebook > Input`) to outrank it.
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_INPUT_CONTEXT,
+        "notebook.run_cell",
+        "notebook.run_cell",
+        &["secondary-enter"],
+        NotebookRunCell
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_INPUT_CONTEXT,
+        "notebook.run_advance",
+        "keymap.notebook.run_advance",
+        &["shift-enter"],
+        NotebookRunAdvance
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_INPUT_CONTEXT,
+        "notebook.run_insert",
+        "keymap.notebook.run_insert",
+        &["alt-enter"],
+        NotebookRunInsert
+    ),
+    nav_command!(
+        CommandGroup::Notebook,
+        NOTEBOOK_INPUT_CONTEXT,
+        "notebook.leave_edit",
+        "keymap.notebook.leave_edit",
+        &["escape"],
+        NotebookLeaveEdit
+    ),
 ];
 
 /// The command with `id`, if it exists.
