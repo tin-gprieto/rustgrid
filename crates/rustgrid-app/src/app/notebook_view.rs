@@ -5,6 +5,7 @@
 //! real [`ui::SqlEditor`] (created on first render, kept in `AppView::notebook_editors`), with its
 //! result grids under it.
 
+use gpui_kit::component::text::TextView;
 use rustgrid_notebook::{CellKind, CellOutput};
 
 use super::*;
@@ -27,6 +28,9 @@ struct CellView {
     count: Option<u32>,
     elapsed: Option<std::time::Duration>,
     running: bool,
+    /// Markdown: shown as its editor rather than rendered.
+    editing: bool,
+    is_last: bool,
     /// Per output: its result grid when the last run produced one, otherwise a summary line.
     outputs: Vec<(Option<u64>, String, u32)>,
 }
@@ -53,6 +57,7 @@ impl AppView {
             .get(selected)
             .is_some_and(|state| state.cell.kind == CellKind::Sql);
         let has_session = self.notebook_sessions.contains_key(&tab_id);
+        let cell_count = tab.cells.len();
         let cells: Vec<CellView> = tab
             .cells
             .iter()
@@ -65,6 +70,8 @@ impl AppView {
                 count: state.cell.execution_count,
                 elapsed: state.elapsed,
                 running: tab.running == Some(cell_index),
+                editing: state.editing,
+                is_last: cell_index + 1 == cell_count,
                 outputs: state
                     .cell
                     .outputs
@@ -221,44 +228,165 @@ impl AppView {
             String::new()
         };
 
-        let body: AnyElement = match cell.kind {
-            CellKind::Sql => match self.ensure_notebook_editor(index, &cell.id, cx) {
-                Some(editor) => {
-                    let lines = cell
-                        .source
-                        .lines()
-                        .count()
-                        .clamp(EDITOR_MIN_LINES, EDITOR_MAX_LINES);
-                    let line_height = self.editor_font_size() * 1.5;
-                    div()
-                        .flex()
-                        .flex_col()
-                        .h(px(lines as f32 * line_height + 12.0))
-                        .rounded(px(4.0))
-                        .border_1()
-                        .border_color(rgb(theme.border))
-                        .overflow_hidden()
-                        .child(editor)
-                        .into_any_element()
-                }
-                None => div().into_any_element(),
-            },
-            _ => {
-                let source = if cell.source.is_empty() {
-                    div()
-                        .text_color(rgb(theme.text_muted))
-                        .child(t!("notebook.cell.empty").to_string())
-                } else {
-                    div().text_color(rgb(theme.text)).child(cell.source.clone())
-                };
-                source
-                    .when(cell.kind != CellKind::Markdown, |source| {
-                        source.font_family(editor_font.clone())
-                    })
-                    .text_size(px(12.5))
-                    .into_any_element()
-            }
+        let editor_height = |source: &str, font_size: f32| {
+            let lines = source
+                .lines()
+                .count()
+                .clamp(EDITOR_MIN_LINES, EDITOR_MAX_LINES);
+            px(lines as f32 * font_size * 1.5 + 12.0)
         };
+        let show_editor = match cell.kind {
+            CellKind::Sql => true,
+            CellKind::Markdown => cell.editing,
+            CellKind::Raw => false,
+        };
+        let body: AnyElement = if show_editor {
+            match self.ensure_notebook_editor(index, &cell.id, cx) {
+                Some(editor) => div()
+                    .flex()
+                    .flex_col()
+                    .h(editor_height(&cell.source, self.editor_font_size()))
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .overflow_hidden()
+                    .child(editor)
+                    .into_any_element(),
+                None => div().into_any_element(),
+            }
+        } else if cell.kind == CellKind::Markdown {
+            // Rendered; a double-click opens the editor.
+            let content: AnyElement = if cell.source.trim().is_empty() {
+                div()
+                    .text_size(px(12.5))
+                    .text_color(rgb(theme.text_muted))
+                    .child(t!("notebook.cell.empty").to_string())
+                    .into_any_element()
+            } else {
+                TextView::markdown(
+                    SharedString::from(format!("notebook-{tab_id}-md-{}", cell.id)),
+                    cell.source.clone(),
+                )
+                .selectable(true)
+                .text_size(px(13.0))
+                .into_any_element()
+            };
+            div()
+                .id(SharedString::from(format!(
+                    "notebook-{tab_id}-md-area-{}",
+                    cell.id
+                )))
+                .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                    if event.click_count() >= 2 {
+                        this.edit_notebook_markdown(index, cell_index, true, cx);
+                    }
+                }))
+                .child(content)
+                .into_any_element()
+        } else {
+            // Raw: a non-SQL code cell (Python, `%load_ext sql`, ...) kept as it is.
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_family(editor_font.clone())
+                        .text_color(rgb(theme.text_muted))
+                        .child(cell.source.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .italic()
+                        .text_color(rgb(theme.text_muted))
+                        .child(t!("notebook.cell.raw_notice").to_string()),
+                )
+                .into_any_element()
+        };
+
+        // Per-cell actions, on the right of the header.
+        let action = |id: &str, icon: &'static str, tip: String, enabled: bool| {
+            ui::icon_button(
+                SharedString::from(format!("notebook-{tab_id}-{id}-{}", cell.id)),
+                icon,
+                if enabled {
+                    theme.text
+                } else {
+                    theme.text_muted
+                },
+                18.0,
+                18.0,
+                false,
+                theme,
+                |_, _, _| {},
+            )
+            .tooltip(ui::text_tooltip(tip))
+            .when(!enabled, |button| button.opacity(0.4))
+        };
+        let mut actions = div().flex().flex_row().items_center().gap_0p5();
+        if cell.kind == CellKind::Markdown && cell.editing {
+            actions = actions.child(
+                action(
+                    "done",
+                    "icons/check.svg",
+                    t!("notebook.cell.done").to_string(),
+                    true,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.edit_notebook_markdown(index, cell_index, false, cx)
+                })),
+            );
+        }
+        if cell.kind != CellKind::Raw {
+            let (target, label) = if cell.kind == CellKind::Sql {
+                (CellKind::Markdown, t!("notebook.cell.to_markdown"))
+            } else {
+                (CellKind::Sql, t!("notebook.cell.to_sql"))
+            };
+            actions = actions.child(
+                action("kind", "icons/type.svg", label.to_string(), !cell.running).on_click(
+                    cx.listener(move |this, _event, _window, cx| {
+                        this.set_notebook_cell_kind(index, cell_index, target, cx)
+                    }),
+                ),
+            );
+        }
+        actions = actions
+            .child(
+                action(
+                    "up",
+                    "icons/arrow-up.svg",
+                    t!("notebook.cell.move_up").to_string(),
+                    cell_index > 0,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.move_notebook_cell(index, cell_index, true, cx)
+                })),
+            )
+            .child(
+                action(
+                    "down",
+                    "icons/arrow-down.svg",
+                    t!("notebook.cell.move_down").to_string(),
+                    !cell.is_last,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.move_notebook_cell(index, cell_index, false, cx)
+                })),
+            )
+            .child(
+                action(
+                    "delete",
+                    "icons/trash.svg",
+                    t!("notebook.cell.delete").to_string(),
+                    !cell.running,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.delete_notebook_cell(index, cell_index, cx)
+                })),
+            );
 
         let mut card = div()
             .id(SharedString::from(format!(
@@ -294,7 +422,8 @@ impl AppView {
                     .child(div().font_family(editor_font.clone()).child(count))
                     .child(kind)
                     .child(div().flex_1())
-                    .child(status),
+                    .child(status)
+                    .child(actions),
             )
             .child(body);
         for (grid_id, text, color) in cell.outputs {

@@ -161,8 +161,9 @@ impl AppView {
         CellRunStart::Started
     }
 
-    /// The editor of the SQL cell `cell_id` in the notebook at `index`, created on first use with
-    /// the cell's text and the connection's highlighting. Its edits are mirrored into the cell.
+    /// The editor of the cell `cell_id` in the notebook at `index`, created on first use with the
+    /// cell's text: SQL with the connection's highlighting, or Markdown. Its edits are mirrored
+    /// into the cell. A cell whose kind changes gets a new editor.
     pub(super) fn ensure_notebook_editor(
         &mut self,
         index: usize,
@@ -175,13 +176,13 @@ impl AppView {
         if let Some(editor) = self.notebook_editors.get(&key) {
             return Some(editor.clone());
         }
-        let source = tab
+        let cell = &tab
             .cells
             .iter()
             .find(|state| state.cell.id == cell_id)?
-            .cell
-            .source
-            .clone();
+            .cell;
+        let source = cell.source.clone();
+        let sql = cell.kind == rustgrid_notebook::CellKind::Sql;
         let connection_index = tab.connection_index;
         let database = tab.database.clone();
         let schema = tab.schema.clone();
@@ -191,7 +192,7 @@ impl AppView {
         let supports_schemas = connection_index
             .is_some_and(|connection| self.driver_supports(connection, DriverCapability::Schemas));
         let options = ui::SqlEditorOptions {
-            language: "sql".into(),
+            language: if sql { "sql" } else { "markdown" }.into(),
             font_family: self.editor_font().into(),
             font_size: self.editor_font_size(),
             line_number: self.editor_line_numbers,
@@ -228,16 +229,18 @@ impl AppView {
                         .update(cx, |app, cx| app.zoom_editor_font(step, cx))
                         .unwrap_or(false)
                 }));
-            editor.set_scope(
-                connection_index,
-                database,
-                schema,
-                supports_schemas,
-                dialect,
-                false,
-                false,
-                cx,
-            );
+            if sql {
+                editor.set_scope(
+                    connection_index,
+                    database,
+                    schema,
+                    supports_schemas,
+                    dialect,
+                    false,
+                    false,
+                    cx,
+                );
+            }
             editor.set_text(source, cx);
             editor
         });
@@ -555,10 +558,94 @@ impl AppView {
         cx: &mut Context<'_, Self>,
     ) {
         if let Some(tab) = self.notebooks.get_mut(index)
-            && cell < tab.cells.len()
-            && tab.selected != cell
+            && tab.select_cell(cell)
         {
-            tab.selected = cell;
+            cx.notify();
+        }
+    }
+
+    /// Move the cell at `cell` one slot up (`up`) or down.
+    pub(super) fn move_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        up: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let to = if up {
+            cell.checked_sub(1)
+        } else {
+            Some(cell + 1).filter(|to| *to < tab.cells.len())
+        };
+        if let Some(to) = to {
+            tab.move_cell(cell, to);
+            cx.notify();
+        }
+    }
+
+    /// Delete the cell at `cell`, with its editor and result grids. The running cell stays.
+    pub(super) fn delete_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let Some(cell_id) = tab.cells.get(cell).map(|state| state.cell.id.clone()) else {
+            return;
+        };
+        let count = tab.cells.len();
+        let grids = tab.remove_cell(cell);
+        if tab.cells.len() == count {
+            return;
+        }
+        let tab_id = tab.id;
+        self.notebook_editors.remove(&(tab_id, cell_id));
+        self.remove_grids_by_id(&grids, cx);
+        cx.notify();
+    }
+
+    /// Turn the cell at `cell` into an SQL or Markdown cell. Its editor is rebuilt for the new
+    /// language and its result grids go with its outputs.
+    pub(super) fn set_notebook_cell_kind(
+        &mut self,
+        index: usize,
+        cell: usize,
+        kind: rustgrid_notebook::CellKind,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let Some(cell_id) = tab.cells.get(cell).map(|state| state.cell.id.clone()) else {
+            return;
+        };
+        let before = tab.cells[cell].cell.kind;
+        let grids = tab.set_cell_kind(cell, kind);
+        if tab.cells[cell].cell.kind == before {
+            return;
+        }
+        let tab_id = tab.id;
+        self.notebook_editors.remove(&(tab_id, cell_id));
+        self.remove_grids_by_id(&grids, cx);
+        cx.notify();
+    }
+
+    /// Show a Markdown cell as its editor (`true`, the double-click) or rendered (`false`).
+    pub(super) fn edit_notebook_markdown(
+        &mut self,
+        index: usize,
+        cell: usize,
+        editing: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(tab) = self.notebooks.get_mut(index) {
+            tab.set_markdown_editing(cell, editing);
             cx.notify();
         }
     }
