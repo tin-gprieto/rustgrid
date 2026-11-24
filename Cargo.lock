@@ -7691,6 +7691,7 @@ dependencies = [
  "rustgrid-mcp",
  "rustgrid-mongodb",
  "rustgrid-mysql",
+ "rustgrid-notebook",
  "rustgrid-odbc",
  "rustgrid-oracle",
  "rustgrid-postgresql",

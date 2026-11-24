@@ -774,6 +774,167 @@ impl QueryTab {
     }
 }
 
+/// One cell of an open notebook: the model cell plus UI/run state that is never saved.
+#[allow(dead_code)] // wired to the UI and execution in later notebook stages
+pub struct NotebookCellState {
+    pub cell: rustgrid_notebook::Cell,
+    /// Markdown cells: editing the source instead of showing it rendered.
+    pub editing: bool,
+    /// The grid id in `AppView::grids` for each of the last run's result sets (`None` for a
+    /// statement that produced no result set).
+    pub result_grids: Vec<Option<u64>>,
+    /// The last run's error, if it failed.
+    pub error: Option<String>,
+    /// How long the last run took.
+    pub elapsed: Option<std::time::Duration>,
+}
+
+#[allow(dead_code)] // wired to the UI and execution in later notebook stages
+impl NotebookCellState {
+    pub fn new(cell: rustgrid_notebook::Cell) -> Self {
+        Self {
+            cell,
+            editing: false,
+            result_grids: Vec::new(),
+            error: None,
+            elapsed: None,
+        }
+    }
+}
+
+/// An open SQL notebook tab. The cells live in `cells`; everything else the file carries (unknown
+/// metadata, format version, unknown top-level keys) stays in `base` so saving loses nothing.
+#[allow(dead_code)] // wired to the UI and execution in later notebook stages
+pub struct NotebookTab {
+    pub id: u64,
+    /// The `.ipynb` file this tab is bound to; `None` until it is first saved.
+    pub path: Option<std::path::PathBuf>,
+    pub connection_index: Option<usize>,
+    pub database: Option<String>,
+    pub schema: Option<String>,
+    pub cells: Vec<NotebookCellState>,
+    /// The selected cell.
+    pub selected: usize,
+    /// The index of the cell being run, if any.
+    pub running: Option<usize>,
+    /// Bumped on every run and on stop; a late result whose generation no longer matches is
+    /// discarded (same pattern as [`QueryTab::run_generation`]).
+    pub run_generation: u64,
+    /// The last `execution_count` handed out; the next run uses this plus one.
+    pub execution_counter: u32,
+    /// Unsaved edits exist.
+    pub dirty: bool,
+    /// The connection id the file was loaded with. The id may name a profile this machine does
+    /// not have (`connection_index` is then `None`), and it must survive a save so the binding is
+    /// not stripped from the file; an explicit [`NotebookTab::set_binding`] clears it.
+    loaded_connection_id: Option<String>,
+    /// The loaded notebook with its cells and binding removed: carries the metadata, format
+    /// version and top-level keys that [`NotebookTab::to_notebook`] writes back unchanged.
+    base: rustgrid_notebook::Notebook,
+}
+
+#[allow(dead_code)] // wired to the UI and execution in later notebook stages
+impl NotebookTab {
+    pub fn from_notebook(
+        id: u64,
+        mut notebook: rustgrid_notebook::Notebook,
+        path: Option<std::path::PathBuf>,
+        connection_index: Option<usize>,
+    ) -> Self {
+        let cells = std::mem::take(&mut notebook.cells);
+        let binding = notebook.binding.take();
+        let execution_counter = cells
+            .iter()
+            .filter_map(|cell| cell.execution_count)
+            .max()
+            .unwrap_or(0);
+        Self {
+            id,
+            path,
+            connection_index,
+            database: binding.as_ref().and_then(|b| b.database.clone()),
+            schema: binding.as_ref().and_then(|b| b.schema.clone()),
+            loaded_connection_id: binding.map(|b| b.connection_id),
+            cells: cells.into_iter().map(NotebookCellState::new).collect(),
+            selected: 0,
+            running: None,
+            run_generation: 0,
+            execution_counter,
+            dirty: false,
+            base: notebook,
+        }
+    }
+
+    /// The notebook to write to disk. The caller resolves `connection_id` from the bound
+    /// connection profile. `None` means "could not resolve": the connection id the file was
+    /// loaded with is kept, so an unknown profile never strips the binding. A deliberate unbind
+    /// goes through [`NotebookTab::set_binding`], which forgets the loaded id.
+    pub fn to_notebook(&self, connection_id: Option<&str>) -> rustgrid_notebook::Notebook {
+        let mut notebook = self.base.clone();
+        notebook.cells = self.cells.iter().map(|state| state.cell.clone()).collect();
+        let connection_id = connection_id
+            .map(str::to_owned)
+            .or_else(|| self.loaded_connection_id.clone());
+        notebook.binding = connection_id.map(|id| rustgrid_notebook::NotebookBinding {
+            connection_id: id,
+            database: self.database.clone(),
+            schema: self.schema.clone(),
+        });
+        notebook
+    }
+
+    pub fn set_cell_source(&mut self, index: usize, source: String) {
+        if let Some(state) = self.cells.get_mut(index) {
+            state.cell.source = source;
+            self.dirty = true;
+        }
+    }
+
+    /// Insert at `index` (clamped to the end) and select the new cell.
+    pub fn insert_cell(&mut self, index: usize, cell: rustgrid_notebook::Cell) {
+        let index = index.min(self.cells.len());
+        self.cells.insert(index, NotebookCellState::new(cell));
+        self.selected = index;
+        self.dirty = true;
+    }
+
+    pub fn remove_cell(&mut self, index: usize) {
+        if index >= self.cells.len() {
+            return;
+        }
+        self.cells.remove(index);
+        if index < self.selected {
+            self.selected -= 1;
+        }
+        self.selected = self.selected.min(self.cells.len().saturating_sub(1));
+        self.dirty = true;
+    }
+
+    /// Move a cell to position `to` and keep it selected.
+    pub fn move_cell(&mut self, from: usize, to: usize) {
+        if from >= self.cells.len() || to >= self.cells.len() || from == to {
+            return;
+        }
+        let state = self.cells.remove(from);
+        self.cells.insert(to, state);
+        self.selected = to;
+        self.dirty = true;
+    }
+
+    pub fn set_binding(
+        &mut self,
+        connection_index: Option<usize>,
+        database: Option<String>,
+        schema: Option<String>,
+    ) {
+        self.connection_index = connection_index;
+        self.loaded_connection_id = None;
+        self.database = database;
+        self.schema = schema;
+        self.dirty = true;
+    }
+}
+
 /// A result set from a query run, with the editability and target table resolved from the
 /// statement it came from. Built on the async side (where the catalog lookup happens) and handed to
 /// `AppView::apply_query_results` to create one grid per entry.
@@ -1601,6 +1762,134 @@ impl GridState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod notebook_tab {
+        use super::super::*;
+        use rustgrid_notebook::NotebookBinding;
+
+        const FIXTURE: &str =
+            include_str!("../../rustgrid-notebook/tests/fixtures/jupysql_basic.ipynb");
+
+        fn loaded() -> rustgrid_notebook::Notebook {
+            rustgrid_notebook::read_ipynb(FIXTURE).expect("fixture reads")
+        }
+
+        // A notebook as read back from a file bound to "c1": the writer owns the
+        // `metadata.rustgrid` key, so normalise through it.
+        fn bound_to_c1() -> rustgrid_notebook::Notebook {
+            let mut notebook = loaded();
+            notebook.binding = Some(NotebookBinding {
+                connection_id: "c1".into(),
+                database: Some("db".into()),
+                schema: Some("s".into()),
+            });
+            rustgrid_notebook::read_ipynb(&rustgrid_notebook::write_ipynb(&notebook)).unwrap()
+        }
+
+        #[test]
+        fn round_trip_is_lossless() {
+            let original = bound_to_c1();
+            assert_eq!(original.binding.as_ref().unwrap().connection_id, "c1");
+            let tab = NotebookTab::from_notebook(1, original.clone(), None, Some(0));
+            assert_eq!(tab.database.as_deref(), Some("db"));
+            assert_eq!(tab.schema.as_deref(), Some("s"));
+            assert!(!tab.dirty);
+            assert_eq!(tab.to_notebook(Some("c1")), original);
+            let written = rustgrid_notebook::write_ipynb(&tab.to_notebook(Some("c1")));
+            assert_eq!(rustgrid_notebook::read_ipynb(&written).unwrap(), original);
+        }
+
+        #[test]
+        fn unbound_notebook_has_no_binding() {
+            let mut notebook = loaded();
+            notebook.binding = None;
+            let tab = NotebookTab::from_notebook(1, notebook, None, None);
+            assert!(tab.to_notebook(None).binding.is_none());
+        }
+
+        #[test]
+        fn unresolved_connection_keeps_loaded_binding() {
+            let original = bound_to_c1();
+            let tab = NotebookTab::from_notebook(1, original.clone(), None, None);
+            assert_eq!(tab.to_notebook(None), original);
+            let written = rustgrid_notebook::write_ipynb(&tab.to_notebook(None));
+            let reread = rustgrid_notebook::read_ipynb(&written).unwrap();
+            let binding = reread.binding.expect("binding survives");
+            assert_eq!(binding.connection_id, "c1");
+            assert_eq!(binding.database.as_deref(), Some("db"));
+            assert_eq!(binding.schema.as_deref(), Some("s"));
+        }
+
+        #[test]
+        fn explicit_unbind_drops_binding() {
+            let mut tab = NotebookTab::from_notebook(1, bound_to_c1(), None, None);
+            tab.set_binding(None, None, None);
+            assert!(tab.to_notebook(None).binding.is_none());
+        }
+
+        #[test]
+        fn execution_counter_starts_at_max_count() {
+            let notebook = loaded();
+            let max = notebook
+                .cells
+                .iter()
+                .filter_map(|c| c.execution_count)
+                .max()
+                .unwrap_or(0);
+            let tab = NotebookTab::from_notebook(1, notebook, None, None);
+            assert_eq!(tab.execution_counter, max);
+            assert!(max > 0);
+        }
+
+        #[test]
+        fn helpers_mark_dirty() {
+            let fresh = || NotebookTab::from_notebook(1, loaded(), None, None);
+            let mut tab = fresh();
+            tab.set_cell_source(0, "select 2".into());
+            assert!(tab.dirty);
+            assert_eq!(tab.cells[0].cell.source, "select 2");
+
+            let mut tab = fresh();
+            let n = tab.cells.len();
+            tab.insert_cell(1, rustgrid_notebook::Cell::new_sql("x"));
+            assert!(tab.dirty);
+            assert_eq!(tab.cells.len(), n + 1);
+            assert_eq!(tab.selected, 1);
+
+            let mut tab = fresh();
+            tab.remove_cell(0);
+            assert!(tab.dirty);
+            assert_eq!(tab.cells.len(), n - 1);
+
+            let mut tab = fresh();
+            tab.selected = 3;
+            tab.remove_cell(0);
+            assert_eq!(tab.selected, 2);
+
+            let mut tab = fresh();
+            let first = tab.cells[0].cell.id.clone();
+            tab.move_cell(0, 1);
+            assert!(tab.dirty);
+            assert_eq!(tab.cells[1].cell.id, first);
+
+            let mut tab = fresh();
+            tab.set_binding(Some(3), Some("d".into()), None);
+            assert!(tab.dirty);
+            assert_eq!(tab.connection_index, Some(3));
+            assert_eq!(tab.database.as_deref(), Some("d"));
+        }
+
+        #[test]
+        fn removing_the_only_cell_resets_selection() {
+            let mut tab =
+                NotebookTab::from_notebook(1, rustgrid_notebook::Notebook::default(), None, None);
+            assert!(tab.cells.is_empty());
+            tab.insert_cell(0, rustgrid_notebook::Cell::new_sql("a"));
+            tab.remove_cell(0);
+            assert!(tab.cells.is_empty());
+            assert_eq!(tab.selected, 0);
+        }
+    }
 
     fn columns(names: &[&str]) -> Vec<ColumnInfo> {
         names

@@ -13,3 +13,6 @@ DATABASES.local.md
 
 # Local benchmark credentials (see tools/rgbench/config.example.json).
 tools/rgbench/config.local.json
+docs/rustgrid-notebooks-plan.md
+docs/.obsidian
+.claude
