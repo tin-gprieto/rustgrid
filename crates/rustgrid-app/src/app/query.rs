@@ -1874,6 +1874,82 @@ impl AppView {
         cx.notify();
     }
 
+    /// Create the read-only-or-editable grid for one query result set, register it in
+    /// `AppView::grids` and return its id. Used by the query tab and the notebook cells.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_query_result_grid(
+        &mut self,
+        connection: Arc<dyn Connection>,
+        dialect: rustgrid_core::DriverDialect,
+        connection_name: String,
+        result: QueryResult,
+        database: String,
+        table: String,
+        editable: bool,
+        elapsed: std::time::Duration,
+        cx: &mut Context<'_, Self>,
+    ) -> u64 {
+        let id = self.next_grid_id;
+        self.next_grid_id += 1;
+        let total = result.rows.len() as u64;
+        let column_widths = compute_column_widths(&result.columns, &result.rows);
+        let column_count = result.columns.len();
+        let state = GridState {
+            id,
+            connection,
+            dialect,
+            connection_name,
+            // A query result is not a table, so there is no field layout to key on.
+            connection_id: String::new(),
+            database,
+            table,
+            is_view: false,
+            key_status: None,
+            documents: false,
+            document_json: None,
+            document_key: None,
+            document_loading: false,
+            document_error: None,
+            document_edits: BTreeMap::new(),
+            page_index: 0,
+            page_size: total.max(1),
+            loading: false,
+            error: None,
+            columns: result.columns.clone(),
+            all_columns: result.columns,
+            field_layout: GridFieldLayout::default(),
+            column_order: (0..column_count).collect(),
+            visible_columns: column_count,
+            frozen_columns: Vec::new(),
+            rows: Arc::new(result.rows),
+            column_widths,
+            manual_column_widths: false,
+            total_rows: Some(total),
+            selection: None,
+            edits: BTreeMap::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            sql: Some(result.statement.clone()),
+            show_toolbar: false,
+            show_footer: true,
+            editable,
+            sort_rules: Vec::new(),
+            sort_open: false,
+            sort_draft: Vec::new(),
+            filters: Vec::new(),
+            filter_open: false,
+            filter_draft: Vec::new(),
+            elapsed: Some(elapsed),
+        };
+        let app = cx.weak_entity();
+        let runtime = self.runtime.clone();
+        let theme = self.theme;
+        let clipboard = self.grid_clipboard.clone();
+        let entity = cx.new(|cx| GridView::new(state, app, runtime, theme, clipboard, cx));
+        self.grids.push(entity);
+        id
+    }
+
     /// Install the result sets of a query run: one grid per result set, plus the per-entry state
     /// that drives the bottom result tabs and the 信息 panel.
     #[allow(clippy::too_many_arguments)]
@@ -1905,15 +1981,7 @@ impl AppView {
             .get(index)
             .map(|tab| tab.result_grids.iter().flatten().copied().collect())
             .unwrap_or_default();
-        for id in old_ids {
-            if let Some(position) = self
-                .grids
-                .iter()
-                .position(|grid| grid.read(cx).state.id == id)
-            {
-                self.grids.remove(position);
-            }
-        }
+        self.remove_grids_by_id(&old_ids, cx);
 
         match result {
             Ok(plans) => {
@@ -1963,65 +2031,17 @@ impl AppView {
                         rows_affected: result.rows_affected,
                     };
                     if result.has_result_set {
-                        let id = self.next_grid_id;
-                        self.next_grid_id += 1;
-                        let total = result.rows.len() as u64;
-                        let column_widths = compute_column_widths(&result.columns, &result.rows);
-                        let column_count = result.columns.len();
-                        let state = GridState {
-                            id,
-                            connection: connection.clone(),
+                        let id = self.push_query_result_grid(
+                            connection.clone(),
                             dialect,
-                            connection_name: connection_name.clone(),
-                            // A query result is not a table, so there is no field layout to key on.
-                            connection_id: String::new(),
+                            connection_name.clone(),
+                            result,
                             database,
                             table,
-                            is_view: false,
-                            key_status: None,
-                            documents: false,
-                            document_json: None,
-                            document_key: None,
-                            document_loading: false,
-                            document_error: None,
-                            document_edits: BTreeMap::new(),
-                            page_index: 0,
-                            page_size: total.max(1),
-                            loading: false,
-                            error: None,
-                            columns: result.columns.clone(),
-                            all_columns: result.columns,
-                            field_layout: GridFieldLayout::default(),
-                            column_order: (0..column_count).collect(),
-                            visible_columns: column_count,
-                            frozen_columns: Vec::new(),
-                            rows: Arc::new(result.rows),
-                            column_widths,
-                            manual_column_widths: false,
-                            total_rows: Some(total),
-                            selection: None,
-                            edits: BTreeMap::new(),
-                            undo: Vec::new(),
-                            redo: Vec::new(),
-                            sql: Some(result.statement.clone()),
-                            show_toolbar: false,
-                            show_footer: true,
                             editable,
-                            sort_rules: Vec::new(),
-                            sort_open: false,
-                            sort_draft: Vec::new(),
-                            filters: Vec::new(),
-                            filter_open: false,
-                            filter_draft: Vec::new(),
-                            elapsed: Some(elapsed),
-                        };
-                        let app = cx.weak_entity();
-                        let runtime = self.runtime.clone();
-                        let theme = self.theme;
-                        let clipboard = self.grid_clipboard.clone();
-                        let entity =
-                            cx.new(|cx| GridView::new(state, app, runtime, theme, clipboard, cx));
-                        self.grids.push(entity);
+                            elapsed,
+                            cx,
+                        );
                         result_grids.push(Some(id));
                     } else {
                         result_grids.push(None);

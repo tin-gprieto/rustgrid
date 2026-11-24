@@ -130,6 +130,22 @@ impl AppView {
         cx.notify();
     }
 
+    /// Drop the grids with these ids from `AppView::grids`, keeping the active grid selected
+    /// when it survives (its index is re-resolved by id) and clearing it when it was dropped.
+    pub(super) fn remove_grids_by_id(&mut self, ids: &[u64], cx: &App) {
+        if ids.is_empty() {
+            return;
+        }
+        let active_id = self.active_grid_id(cx);
+        self.grids
+            .retain(|grid| !ids.contains(&grid.read(cx).state.id));
+        self.active_grid = active_id.and_then(|id| {
+            self.grids
+                .iter()
+                .position(|grid| grid.read(cx).state.id == id)
+        });
+    }
+
     pub(super) fn close_connection_grids(&mut self, connection: &Arc<dyn Connection>, cx: &App) {
         let active_id = self.active_grid_id(cx);
         self.grids

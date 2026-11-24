@@ -901,16 +901,42 @@ impl NotebookTab {
         self.dirty = true;
     }
 
-    pub fn remove_cell(&mut self, index: usize) {
+    /// Remove the cell at `index`. Returns the ids of the removed cell's result grids, which the
+    /// caller must drop from `AppView::grids`.
+    #[must_use]
+    pub fn remove_cell(&mut self, index: usize) -> Vec<u64> {
         if index >= self.cells.len() {
-            return;
+            return Vec::new();
         }
-        self.cells.remove(index);
+        let removed = self.cells.remove(index);
         if index < self.selected {
             self.selected -= 1;
         }
         self.selected = self.selected.min(self.cells.len().saturating_sub(1));
         self.dirty = true;
+        removed.result_grids.into_iter().flatten().collect()
+    }
+
+    /// Set the result grids of the cell `cell_id` and return the ids of the grids it showed
+    /// before, which the caller must drop from `AppView::grids`. An unknown cell returns `grids`'
+    /// own ids, so nothing the caller created is left without an owner.
+    #[must_use]
+    pub fn replace_result_grids(&mut self, cell_id: &str, grids: Vec<Option<u64>>) -> Vec<u64> {
+        match self.cells.iter_mut().find(|state| state.cell.id == cell_id) {
+            Some(state) => std::mem::replace(&mut state.result_grids, grids)
+                .into_iter()
+                .flatten()
+                .collect(),
+            None => grids.into_iter().flatten().collect(),
+        }
+    }
+
+    /// Every result grid id the notebook's cells own.
+    pub fn all_grid_ids(&self) -> Vec<u64> {
+        self.cells
+            .iter()
+            .flat_map(|state| state.result_grids.iter().flatten().copied())
+            .collect()
     }
 
     /// Move a cell to position `to` and keep it selected.
@@ -1940,13 +1966,13 @@ mod tests {
             assert_eq!(tab.selected, 1);
 
             let mut tab = fresh();
-            tab.remove_cell(0);
+            let _ = tab.remove_cell(0);
             assert!(tab.dirty);
             assert_eq!(tab.cells.len(), n - 1);
 
             let mut tab = fresh();
             tab.selected = 3;
-            tab.remove_cell(0);
+            let _ = tab.remove_cell(0);
             assert_eq!(tab.selected, 2);
 
             let mut tab = fresh();
@@ -2084,6 +2110,29 @@ mod tests {
         }
 
         #[test]
+        fn result_grids_are_handed_back_when_replaced_or_removed() {
+            let mut tab = sql_tab();
+            let first = tab.cells[0].cell.id.clone();
+            let second = tab.cells[1].cell.id.clone();
+            assert!(
+                tab.replace_result_grids(&first, vec![Some(1), None, Some(2)])
+                    .is_empty()
+            );
+            assert!(tab.replace_result_grids(&second, vec![Some(3)]).is_empty());
+            assert_eq!(tab.all_grid_ids(), vec![1, 2, 3]);
+
+            assert_eq!(tab.replace_result_grids(&first, vec![Some(4)]), vec![1, 2]);
+            assert_eq!(tab.all_grid_ids(), vec![4, 3]);
+
+            // A cell that is gone cannot own the new grids.
+            assert_eq!(tab.replace_result_grids("missing", vec![Some(5)]), vec![5]);
+
+            assert_eq!(tab.remove_cell(1), vec![3]);
+            assert_eq!(tab.all_grid_ids(), vec![4]);
+            assert!(tab.remove_cell(9).is_empty());
+        }
+
+        #[test]
         fn failing_a_cell_records_the_error() {
             let mut tab = sql_tab();
             let id = tab.cells[0].cell.id.clone();
@@ -2099,7 +2148,7 @@ mod tests {
                 NotebookTab::from_notebook(1, rustgrid_notebook::Notebook::default(), None, None);
             assert!(tab.cells.is_empty());
             tab.insert_cell(0, rustgrid_notebook::Cell::new_sql("a"));
-            tab.remove_cell(0);
+            let _ = tab.remove_cell(0);
             assert!(tab.cells.is_empty());
             assert_eq!(tab.selected, 0);
         }

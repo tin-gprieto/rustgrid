@@ -51,6 +51,7 @@ impl AppView {
         let connection_index = tab.connection_index;
         let Some(connection) = connection_index.and_then(|index| self.connection_arc(index)) else {
             self.notebooks[position].fail_cell(&cell_id, t!("query.not_connected").to_string());
+            self.set_notebook_cell_grids(position, &cell_id, Vec::new(), cx);
             cx.notify();
             return;
         };
@@ -165,7 +166,7 @@ impl AppView {
         if generation != tab.run_generation {
             return;
         }
-        tab.finish_run(
+        let installed = tab.finish_run(
             cell_id,
             generation,
             elapsed,
@@ -173,12 +174,71 @@ impl AppView {
             error,
             NOTEBOOK_OUTPUT_MAX_ROWS,
         );
+        if installed {
+            self.install_notebook_result_grids(position, cell_id, results, elapsed, cx);
+        }
         // Only a session that still pins a connection is kept; an empty guard (a driver without
         // sessions, or one lost to a failed task) is opened again on the next run.
         if let Some(session) = session.filter(|session| session.session.is_some()) {
             self.notebook_sessions.insert(tab_id, session);
         }
         cx.notify();
+    }
+
+    /// Create one read-only grid per result set of a finished cell run (statements without a
+    /// result set get no grid) and replace the cell's previous grids with them.
+    fn install_notebook_result_grids(
+        &mut self,
+        position: usize,
+        cell_id: &str,
+        results: Vec<QueryResult>,
+        elapsed: std::time::Duration,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let tab = &self.notebooks[position];
+        let database = tab.database.clone().unwrap_or_default();
+        let connection_index = tab.connection_index;
+        let connection = connection_index.and_then(|index| self.connection_arc(index));
+        let mut grids = Vec::with_capacity(results.len());
+        if let (Some(connection), Some(connection_index)) = (connection, connection_index) {
+            let dialect = self.driver_dialect(connection_index);
+            let connection_name = self
+                .connections
+                .get(connection_index)
+                .map(|node| node.profile.name.clone())
+                .unwrap_or_default();
+            for result in results {
+                if !result.has_result_set {
+                    grids.push(None);
+                    continue;
+                }
+                let id = self.push_query_result_grid(
+                    connection.clone(),
+                    dialect,
+                    connection_name.clone(),
+                    result,
+                    database.clone(),
+                    String::new(),
+                    false,
+                    elapsed,
+                    cx,
+                );
+                grids.push(Some(id));
+            }
+        }
+        self.set_notebook_cell_grids(position, cell_id, grids, cx);
+    }
+
+    /// Give the cell `cell_id` these grids and drop the ones it had, so no grid is left behind.
+    fn set_notebook_cell_grids(
+        &mut self,
+        position: usize,
+        cell_id: &str,
+        grids: Vec<Option<u64>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let released = self.notebooks[position].replace_result_grids(cell_id, grids);
+        self.remove_grids_by_id(&released, cx);
     }
 
     /// Stop the notebook's running cell: its remaining statements are skipped, its result is
