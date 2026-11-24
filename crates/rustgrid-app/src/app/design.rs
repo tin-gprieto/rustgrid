@@ -5256,6 +5256,7 @@ impl AppView {
         self.active_design = Some(self.designs.len() - 1);
         self.active_grid = None;
         self.active_query = None;
+        self.active_notebook = None;
         entity.update(cx, |design, cx| {
             design.load_schema(cx);
             if design.needs_option_catalogs() {
@@ -5312,6 +5313,7 @@ impl AppView {
         self.active_design = Some(self.designs.len() - 1);
         self.active_grid = None;
         self.active_query = None;
+        self.active_notebook = None;
         // Start with one field so the grid is not empty.
         entity.update(cx, |design, cx| {
             design.add_field(cx);
@@ -5356,6 +5358,7 @@ impl AppView {
         self.active_design = index;
         self.active_query = None;
         self.active_grid = None;
+        self.active_notebook = None;
         if index.is_some() {
             self.main_tab = MainTab::Tables;
         }

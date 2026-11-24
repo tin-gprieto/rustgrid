@@ -70,6 +70,13 @@ impl AppView {
         {
             return Some(index);
         }
+        if let Some(index) = self
+            .active_notebook
+            .and_then(|index| self.notebooks.get(index))
+            .and_then(|tab| tab.connection_index)
+        {
+            return Some(index);
+        }
         self.users_connection_index(cx)
     }
 
@@ -899,6 +906,7 @@ impl AppView {
                 self.active_grid = None;
                 self.active_query = None;
                 self.active_design = None;
+                self.active_notebook = None;
             } else {
                 let existing = self.object_pane.as_ref().map(|pane| {
                     let pane = pane.read(cx);
@@ -923,6 +931,7 @@ impl AppView {
                 self.active_grid = None;
                 self.active_query = None;
                 self.active_design = None;
+                self.active_notebook = None;
             }
         }
 
@@ -1008,6 +1017,7 @@ impl AppView {
         self.active_grid = None;
         self.active_query = None;
         self.active_design = None;
+        self.active_notebook = None;
         cx.notify();
     }
 
@@ -1190,6 +1200,7 @@ impl AppView {
             self.active_grid = None;
             self.active_query = None;
             self.active_design = None;
+            self.active_notebook = None;
             self.saved_query_selected = None;
             self.query_selection.clear();
             self.main_tab = MainTab::Backups;
@@ -1203,6 +1214,7 @@ impl AppView {
         self.active_grid = None;
         self.active_query = None;
         self.active_design = None;
+        self.active_notebook = None;
         match category {
             Category::Tables => self.main_tab = MainTab::Tables,
             Category::Views => self.main_tab = MainTab::Views,
@@ -1381,6 +1393,7 @@ impl AppView {
         self.active_grid = None;
         self.active_query = None;
         self.active_design = None;
+        self.active_notebook = None;
         cx.notify();
     }
 
@@ -1881,6 +1894,7 @@ impl AppView {
         self.active_grid = index;
         self.active_query = None;
         self.active_design = None;
+        self.active_notebook = None;
         // The grid takes the keyboard focus, so arrows / Tab work right after a tab switch.
         self.grid_focus_pending = index.is_some();
         // The toolbar section follows the tab: Tables for a table, Views for a view.

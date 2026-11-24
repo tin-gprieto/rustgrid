@@ -176,6 +176,7 @@ impl AppView {
         self.active_query = Some(self.queries.len() - 1);
         self.active_grid = None;
         self.active_design = None;
+        self.active_notebook = None;
         self.clear_object_search_unless_kept(cx);
         self.query_focus_pending = true;
         self.main_tab = MainTab::Queries;
@@ -260,6 +261,7 @@ impl AppView {
         self.active_query = Some(self.queries.len() - 1);
         self.active_grid = None;
         self.active_design = None;
+        self.active_notebook = None;
         // Switching to a query tab clears every list's search unless 保留对象搜索 keeps them.
         self.clear_object_search_unless_kept(cx);
         self.query_focus_pending = true;
@@ -279,6 +281,7 @@ impl AppView {
             };
         }
         self.active_design = None;
+        self.active_notebook = None;
         self.active_grid = self
             .queries
             .get(index)
@@ -370,6 +373,11 @@ impl AppView {
             TabTarget::Grid(index) => self.close_grid(index, cx),
             TabTarget::Query(index) => self.close_query(index, cx),
             TabTarget::Design(index) => self.close_design(index, cx),
+            TabTarget::Notebook(index) => {
+                if let Some(id) = self.notebooks.get(index).map(|tab| tab.id) {
+                    self.close_notebook(id, cx);
+                }
+            }
         }
     }
 
@@ -393,6 +401,7 @@ impl AppView {
                 while !self.designs.is_empty() {
                     self.close_design_now(self.designs.len() - 1, cx);
                 }
+                self.close_all_notebooks(cx);
                 let mut index = self.grids.len();
                 while index > 0 {
                     index -= 1;
@@ -417,6 +426,7 @@ impl AppView {
                 while !self.designs.is_empty() {
                     self.close_design_now(self.designs.len() - 1, cx);
                 }
+                self.close_all_notebooks(cx);
                 let mut index = self.queries.len();
                 while index > 0 {
                     index -= 1;
@@ -438,6 +448,7 @@ impl AppView {
                 while !self.grids.is_empty() {
                     self.close_grid(self.grids.len() - 1, cx);
                 }
+                self.close_all_notebooks(cx);
                 let mut index = self.designs.len();
                 while index > 0 {
                     index -= 1;
@@ -452,6 +463,32 @@ impl AppView {
                         .position(|design| design.read(cx).id == id)
                 {
                     self.activate_design(Some(position), cx);
+                }
+            }
+            TabTarget::Notebook(keep) => {
+                let keep_id = self.notebooks.get(keep).map(|tab| tab.id);
+                while !self.queries.is_empty() {
+                    self.close_query_now(self.queries.len() - 1, cx);
+                }
+                while !self.grids.is_empty() {
+                    self.close_grid(self.grids.len() - 1, cx);
+                }
+                while !self.designs.is_empty() {
+                    self.close_design_now(self.designs.len() - 1, cx);
+                }
+                let others: Vec<u64> = self
+                    .notebooks
+                    .iter()
+                    .map(|tab| tab.id)
+                    .filter(|id| Some(*id) != keep_id)
+                    .collect();
+                for id in others {
+                    self.close_notebook(id, cx);
+                }
+                if let Some(position) =
+                    keep_id.and_then(|id| self.notebooks.iter().position(|tab| tab.id == id))
+                {
+                    self.activate_notebook(position, cx);
                 }
             }
         }
@@ -477,6 +514,7 @@ impl AppView {
         while !self.designs.is_empty() {
             self.close_design_now(self.designs.len() - 1, cx);
         }
+        self.close_all_notebooks(cx);
     }
 
     pub(super) fn query_connection_options(&self) -> Vec<(String, String)> {
@@ -3575,6 +3613,12 @@ impl AppView {
                 (TabKey::Design(design.read(cx).id), TabTarget::Design(index))
             }),
         );
+        present.extend(
+            self.notebooks
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| (TabKey::Notebook(tab.id), TabTarget::Notebook(index))),
+        );
         let mut sequence = self.tab_sequence.borrow_mut();
         sequence.retain(|key| present.iter().any(|(present, _)| present == key));
         for (key, _) in &present {
@@ -3601,6 +3645,9 @@ impl AppView {
         if let Some(index) = self.active_design {
             return Some(TabTarget::Design(index));
         }
+        if let Some(index) = self.active_notebook {
+            return Some(TabTarget::Notebook(index));
+        }
         self.active_grid
             .filter(|&index| {
                 self.grids
@@ -3616,6 +3663,7 @@ impl AppView {
             Some(TabTarget::Grid(index)) => {
                 self.active_query = None;
                 self.active_design = None;
+                self.active_notebook = None;
                 self.activate_grid(Some(index), cx);
             }
             Some(TabTarget::Design(index)) => {
@@ -3623,10 +3671,12 @@ impl AppView {
                 self.active_grid = None;
                 self.activate_design(Some(index), cx);
             }
+            Some(TabTarget::Notebook(index)) => self.activate_notebook(index, cx),
             None => {
                 self.active_query = None;
                 self.active_grid = None;
                 self.active_design = None;
+                self.active_notebook = None;
                 // The Objects pane lists the items of the current section (tables, views,
                 // queries, backups, ...), so the section is kept.
                 cx.notify();

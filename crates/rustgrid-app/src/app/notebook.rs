@@ -279,15 +279,47 @@ impl AppView {
         self.remove_grids_by_id(&grids, cx);
     }
 
-    /// Close notebook `tab_id`: release its session and grids and drop the tab. Unsaved changes
+    /// Close notebook `tab_id`: release its session and grids and drop the tab, keeping the
+    /// shown tab in place (or settling on a neighbour when this one was shown). Unsaved changes
     /// are the caller's to confirm.
-    #[allow(dead_code)] // called by the tab bar's close in the notebook view stage
     pub(super) fn close_notebook(&mut self, tab_id: u64, cx: &mut Context<'_, Self>) {
         let Some(position) = self.notebook_position(tab_id) else {
             return;
         };
         self.release_notebook_resources(position, cx);
         self.notebooks.remove(position);
+        match self.active_notebook {
+            Some(active) if active == position => {
+                self.active_notebook = if self.notebooks.is_empty() {
+                    None
+                } else {
+                    Some(position.min(self.notebooks.len() - 1))
+                };
+            }
+            Some(active) if active > position => self.active_notebook = Some(active - 1),
+            _ => {}
+        }
+        self.settle_after_tab_closed(cx);
+        cx.notify();
+    }
+
+    /// Close every notebook tab (Close Other / Close All Tabs).
+    pub(super) fn close_all_notebooks(&mut self, cx: &mut Context<'_, Self>) {
+        while let Some(id) = self.notebooks.last().map(|tab| tab.id) {
+            self.close_notebook(id, cx);
+        }
+    }
+
+    /// Show the notebook at `index` in the content pane.
+    pub(super) fn activate_notebook(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if index >= self.notebooks.len() {
+            return;
+        }
+        self.active_notebook = Some(index);
+        self.active_query = None;
+        self.active_design = None;
+        self.active_grid = None;
+        self.main_tab = MainTab::Queries;
         cx.notify();
     }
 

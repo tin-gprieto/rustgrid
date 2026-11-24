@@ -1687,7 +1687,10 @@ impl AppView {
     /// a form. Query results, Redis key pages and the designer's preview grids have their own
     /// layouts and never get one.
     fn form_grid(&self, cx: &App) -> Option<FormGrid> {
-        if self.active_query.is_some() || self.active_design.is_some() {
+        if self.active_query.is_some()
+            || self.active_design.is_some()
+            || self.active_notebook.is_some()
+        {
             return None;
         }
         let grid = self.active_grid.and_then(|index| self.grids.get(index))?;

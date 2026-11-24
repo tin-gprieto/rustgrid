@@ -8,6 +8,10 @@ type ObjectTabRow = (usize, u64, String, bool, bool, Option<ConnectionColor>);
 
 /// A design tab row: `(index, id, title, is_view, environment colour)`.
 type DesignTabRow = (usize, u64, String, bool, Option<ConnectionColor>);
+type NotebookTabRow = (usize, u64, String, Option<ConnectionColor>);
+
+/// The notebook tab's icon (Lucide, served by gpui-kit's asset fallback).
+const NOTEBOOK_ICON: &str = "icons/notebook-text.svg";
 
 /// A query/editor tab row: `(index, id, title, icon, icon colour, environment colour)`.
 type QueryTabRow = (
@@ -303,7 +307,10 @@ impl AppView {
             grid.update(cx, |grid, cx| grid.refresh(cx));
             return;
         }
-        if self.active_query.is_some() || self.active_design.is_some() {
+        if self.active_query.is_some()
+            || self.active_design.is_some()
+            || self.active_notebook.is_some()
+        {
             return;
         }
         match self.main_tab {
@@ -922,6 +929,152 @@ impl TabBar {
                     .child("✕"),
             )
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn notebook_tab(
+        &self,
+        theme: Theme,
+        target: TabTarget,
+        display_index: usize,
+        drag_width: f32,
+        index: usize,
+        id: u64,
+        title: String,
+        color: Option<ConnectionColor>,
+        active: bool,
+        cx: &mut Context<'_, Self>,
+    ) -> impl IntoElement {
+        let icon_color = theme.icon_queries;
+        let tab_id = SharedString::from(format!("notebook-tab-{id}"));
+        let close_id = SharedString::from(format!("notebook-tab-close-{id}"));
+        let activate = self.app.clone();
+        let close = self.app.clone();
+        let menu = self.app.clone();
+        let middle = self.app.clone();
+        let drop = self.app.clone();
+        let drag_visual = TabVisual {
+            title: title.clone(),
+            icon: NOTEBOOK_ICON,
+            icon_color,
+            color,
+        };
+        let active_bg = rgba(tab_background(theme, color, 0x85, theme.editor_bg));
+        let inactive_bg = rgba(tab_background(theme, color, 0x24, theme.button_bg));
+        let hover_bg = if active {
+            active_bg
+        } else {
+            rgba(tab_background(theme, color, 0x4d, theme.tree_hover_bg))
+        };
+
+        div()
+            .id(tab_id)
+            .tooltip(ui::text_tooltip(title.clone()))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .h_full()
+            .px_2()
+            .min_w(px(TAB_MIN_WIDTH))
+            .max_w(px(TAB_MAX_WIDTH))
+            .overflow_hidden()
+            .cursor_pointer()
+            .text_size(px(12.0))
+            .when(active, |style| {
+                style
+                    .bg(active_bg)
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(rgb(theme.border))
+            })
+            .when(!active, |style| {
+                style
+                    .bg(inactive_bg)
+                    .border_1()
+                    .border_color(rgb(theme.border))
+            })
+            .hover(move |style| style.bg(hover_bg))
+            .on_drag(
+                DraggedTab {
+                    source: target,
+                    source_index: display_index,
+                },
+                move |_dragged, _offset, _window, cx| {
+                    cx.new(|_| TabDragPreview {
+                        theme,
+                        visual: drag_visual.clone(),
+                        width: drag_width,
+                    })
+                },
+            )
+            .drag_over::<DraggedTab>(move |tab, dragged, _window, _cx| {
+                tab_drop_target_style(tab, theme, display_index, dragged)
+            })
+            .on_drop(move |dragged: &DraggedTab, _window, cx| {
+                // Deferred, and a plain closure rather than `cx.listener`: the drop reorders the
+                // tabs and notifies the tab bar, and neither may happen while this bar is
+                // borrowed by its own event listener.
+                let app = drop.clone();
+                let source = dragged.source;
+                cx.defer(move |cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        app.drop_tab_on(source, display_index, cx);
+                    });
+                });
+            })
+            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                let _ = activate.update(cx, |app, cx| {
+                    app.activate_notebook(index, cx);
+                });
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |_this, event: &MouseDownEvent, _window, cx| {
+                    let _ = menu.update(cx, |app, cx| {
+                        app.context_menu = None;
+                        app.tab_menu = Some(TabMenu {
+                            target: TabTarget::Notebook(index),
+                            position: event.position,
+                        });
+                        cx.notify();
+                    });
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |_this, _event, _window, cx| {
+                    let _ =
+                        middle.update(cx, |app, cx| app.close_tab(TabTarget::Notebook(index), cx));
+                }),
+            )
+            .child(tree_icon(NOTEBOOK_ICON, icon_color))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .when(active, |style| style.font_weight(FontWeight::SEMIBOLD))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .id(close_id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_none()
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(rgb(theme.button_hover_bg)))
+                    .on_click(cx.listener(move |_this, _event, _window, cx| {
+                        cx.stop_propagation();
+                        let _ = close
+                            .update(cx, |app, cx| app.close_tab(TabTarget::Notebook(index), cx));
+                    }))
+                    .child("✕"),
+            )
+    }
 }
 
 impl Render for TabBar {
@@ -931,9 +1084,11 @@ impl Render for TabBar {
             active_grid,
             active_query,
             active_design,
+            active_notebook,
             grid_tabs,
             query_tabs,
             design_tabs,
+            notebook_tabs,
             object_color,
             active_target,
         ) = {
@@ -1097,6 +1252,39 @@ impl Render for TabBar {
                     (index, design.id, title, design.is_view, color)
                 })
                 .collect();
+            let notebook_tabs: Vec<NotebookTabRow> = app
+                .notebooks
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| {
+                    let name = tab
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.file_stem())
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| t!("notebook.untitled").to_string());
+                    let connection_name = tab
+                        .connection_index
+                        .and_then(|connection| app.connections.get(connection))
+                        .map(|node| node.profile.name.clone());
+                    let mut title = match (&tab.database, connection_name) {
+                        (Some(database), Some(connection)) => {
+                            format!("{name} @{database} ({connection})")
+                        }
+                        (None, Some(connection)) => format!("{name} ({connection})"),
+                        _ => name,
+                    };
+                    title.push_str(" - ");
+                    title.push_str(&t!("notebook.kind"));
+                    if tab.dirty {
+                        title.push_str(" *");
+                    }
+                    let color = tab
+                        .connection_index
+                        .and_then(|connection| app.connection_color(connection));
+                    (index, tab.id, title, color)
+                })
+                .collect();
             // The pinned Object tab keeps the colour of the connection whose object list it shows,
             // so the environment stays visible on every main tab (表/视图/函数/用户/查询/备份).
             let object_color = app
@@ -1109,9 +1297,11 @@ impl Render for TabBar {
                 app.active_grid,
                 app.active_query,
                 app.active_design,
+                app.active_notebook,
                 grid_tabs,
                 query_tabs,
                 design_tabs,
+                notebook_tabs,
                 object_color,
                 app.current_tab(cx),
             )
@@ -1176,6 +1366,30 @@ impl Render for TabBar {
                     is_view,
                     color,
                     active_design == Some(index),
+                    cx,
+                )
+                .into_any_element(),
+            ));
+        }
+        for (index, id, title, color) in notebook_tabs {
+            let target = TabTarget::Notebook(index);
+            let display_index = order.iter().position(|tab| *tab == target).unwrap_or(0);
+            let drag_width = self
+                .tab_bounds(display_index)
+                .map(|bounds| f32::from(bounds.size.width))
+                .unwrap_or(TAB_MAX_WIDTH);
+            tabs.push((
+                target,
+                self.notebook_tab(
+                    theme,
+                    target,
+                    display_index,
+                    drag_width,
+                    index,
+                    id,
+                    title,
+                    color,
+                    active_notebook == Some(index),
                     cx,
                 )
                 .into_any_element(),
@@ -1308,7 +1522,10 @@ impl Render for TabBar {
             .bg(rgb(theme.toolbar_bg));
         bar = bar.child(self.object_tab(
             theme,
-            active_grid.is_none() && active_query.is_none() && active_design.is_none(),
+            active_grid.is_none()
+                && active_query.is_none()
+                && active_design.is_none()
+                && active_notebook.is_none(),
             object_color,
             cx,
         ));
@@ -1402,6 +1619,10 @@ impl AppView {
                 .designs
                 .get(index)
                 .map(|design| TabKey::Design(design.read(cx).id)),
+            TabTarget::Notebook(index) => self
+                .notebooks
+                .get(index)
+                .map(|tab| TabKey::Notebook(tab.id)),
         };
         let grid_ids: Vec<u64> = closing
             .iter()
@@ -1426,10 +1647,20 @@ impl AppView {
                 _ => None,
             })
             .collect();
+        let notebook_ids: Vec<u64> = closing
+            .iter()
+            .filter_map(|tab| match tab {
+                TabTarget::Notebook(index) => self.notebooks.get(*index).map(|tab| tab.id),
+                _ => None,
+            })
+            .collect();
         for id in query_ids {
             if let Some(index) = self.queries.iter().position(|query| query.id == id) {
                 self.close_query_now(index, cx);
             }
+        }
+        for id in notebook_ids {
+            self.close_notebook(id, cx);
         }
         for id in design_ids {
             if let Some(index) = self
@@ -1469,6 +1700,11 @@ impl AppView {
                     .iter()
                     .position(|design| design.read(cx).id == id)
                     .map(TabTarget::Design),
+                TabKey::Notebook(id) => self
+                    .notebooks
+                    .iter()
+                    .position(|tab| tab.id == id)
+                    .map(TabTarget::Notebook),
             });
             self.show_tab(keep, cx);
         }

@@ -1543,6 +1543,7 @@ enum TabKey {
     Grid(u64),
     Query(u64),
     Design(u64),
+    Notebook(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1550,6 +1551,7 @@ enum TabTarget {
     Grid(usize),
     Query(usize),
     Design(usize),
+    Notebook(usize),
 }
 
 struct TabMenu {
@@ -2473,6 +2475,9 @@ pub struct AppView {
     next_query_id: u64,
     /// Open SQL notebook tabs.
     notebooks: Vec<crate::session::NotebookTab>,
+    /// The notebook tab shown now, indexed into `notebooks`. Cleared wherever `active_design` is,
+    /// and checked right after it, so a notebook tab behaves like a designer tab.
+    active_notebook: Option<usize>,
     /// The pinned database session of each notebook, by notebook id. Kept apart from the tab
     /// because a session is not `Clone` and is not tab state.
     notebook_sessions: std::collections::HashMap<u64, runsql::ScriptSessionGuard>,
@@ -3450,6 +3455,7 @@ impl AppView {
             active_query: None,
             next_query_id: 0,
             notebooks: Vec::new(),
+            active_notebook: None,
             notebook_sessions: std::collections::HashMap::new(),
             query_files,
             saved_query_selected: None,
@@ -4755,7 +4761,16 @@ impl AppView {
         self.tree_layout.hash(&mut hasher);
         self.active_grid.hash(&mut hasher);
         self.active_design.hash(&mut hasher);
+        self.active_notebook.hash(&mut hasher);
         self.active_query.hash(&mut hasher);
+        // Notebook tab titles: file name, binding and the unsaved marker.
+        for notebook in &self.notebooks {
+            notebook.id.hash(&mut hasher);
+            notebook.path.hash(&mut hasher);
+            notebook.connection_index.hash(&mut hasher);
+            notebook.database.hash(&mut hasher);
+            notebook.dirty.hash(&mut hasher);
+        }
         self.grids.len().hash(&mut hasher);
         for grid in &self.grids {
             let grid = grid.read(cx);
@@ -4985,6 +5000,7 @@ impl AppView {
         } else if self.active_grid.is_none()
             && self.active_query.is_none()
             && self.active_design.is_none()
+            && self.active_notebook.is_none()
             && let Some(pane) = self.object_pane.clone()
         {
             div()
@@ -5367,7 +5383,7 @@ impl Render for AppView {
                     }
                     Some(TabTarget::Grid(_)) => self.grid_focus_pending = true,
                     Some(TabTarget::Query(_)) => self.query_focus_pending = true,
-                    Some(TabTarget::Design(_)) => {}
+                    Some(TabTarget::Design(_)) | Some(TabTarget::Notebook(_)) => {}
                 }
             }
         }
