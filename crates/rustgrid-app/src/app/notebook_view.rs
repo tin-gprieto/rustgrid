@@ -38,6 +38,8 @@ struct CellView {
     is_last: bool,
     /// Per output: its result grid when the last run produced one, otherwise a summary line.
     outputs: Vec<(Option<u64>, String, u32)>,
+    /// Parameters cell: each row's name and value as typed.
+    params: Vec<(String, String)>,
 }
 
 impl AppView {
@@ -100,6 +102,11 @@ impl AppView {
                         let grid = state.result_grids.get(output_index).copied().flatten();
                         (grid, text, color)
                     })
+                    .collect(),
+                params: state
+                    .param_rows
+                    .iter()
+                    .map(|param| (param.name.clone(), param.value.as_str().to_string()))
                     .collect(),
             })
             .collect();
@@ -206,6 +213,17 @@ impl AppView {
                 cx.listener(move |this, _event, _window, cx| {
                     this.add_notebook_cell(index, CellKind::Markdown, cx)
                 }),
+            ))
+            .child(self.query_tool_button(
+                "notebook-add-parameters",
+                "icons/plus.svg",
+                t!("notebook.add_parameters").to_string(),
+                theme.text,
+                theme.text,
+                true,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.add_notebook_cell(index, CellKind::Parameters, cx)
+                }),
             ));
 
         let mut list = div()
@@ -250,6 +268,89 @@ impl AppView {
             .into_any_element()
     }
 
+    /// A parameters cell: one `name = value` row per parameter, each with `+` (a row under it)
+    /// and `−`, and a note that the values are pasted into the SQL as text.
+    fn render_notebook_params(
+        &mut self,
+        index: usize,
+        tab_id: u64,
+        cell: &CellView,
+        cx: &mut Context<'_, Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let cell_index = cell.index;
+        let mut rows = div().flex().flex_col().gap_1();
+        for (row, (name, value)) in cell.params.iter().enumerate() {
+            let name_input = self.notebook_param_input(tab_id, &cell.id, row, false, name, cx);
+            let value_input = self.notebook_param_input(tab_id, &cell.id, row, true, value, cx);
+            let row_button = |id: &str, icon: &'static str, tip: String| {
+                ui::icon_button(
+                    SharedString::from(format!("notebook-{tab_id}-param-{id}-{}-{row}", cell.id)),
+                    icon,
+                    theme.text,
+                    22.0,
+                    22.0,
+                    true,
+                    theme,
+                    |_, _, _| {},
+                )
+                .tooltip(ui::text_tooltip(tip))
+            };
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(div().w(px(180.0)).flex_none().child(name_input))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(rgb(theme.text_muted))
+                            .child("="),
+                    )
+                    .child(div().flex_1().min_w(px(0.0)).child(value_input))
+                    .child(
+                        row_button(
+                            "remove",
+                            "icons/minus.svg",
+                            t!("notebook.param.remove").to_string(),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.remove_notebook_param_row(index, cell_index, row, cx)
+                            },
+                        )),
+                    )
+                    .child(
+                        row_button(
+                            "add",
+                            "icons/plus.svg",
+                            t!("notebook.param.add").to_string(),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.add_notebook_param_row(index, cell_index, row, cx)
+                            },
+                        )),
+                    ),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(rows)
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .italic()
+                    .text_color(rgb(theme.text_muted))
+                    .child(t!("notebook.param.notice").to_string()),
+            )
+            .into_any_element()
+    }
+
     fn render_notebook_cell(
         &mut self,
         index: usize,
@@ -265,6 +366,7 @@ impl AppView {
             CellKind::Sql => t!("notebook.cell.sql"),
             CellKind::Markdown => t!("notebook.cell.markdown"),
             CellKind::Raw => t!("notebook.cell.raw"),
+            CellKind::Parameters => t!("notebook.cell.parameters"),
         }
         .to_string();
         let count = match (cell.kind, cell.count) {
@@ -290,7 +392,7 @@ impl AppView {
         let show_editor = match cell.kind {
             CellKind::Sql => true,
             CellKind::Markdown => cell.editing,
-            CellKind::Raw => false,
+            CellKind::Raw | CellKind::Parameters => false,
         };
         let body: AnyElement = if show_editor {
             match self.ensure_notebook_editor(index, &cell.id, cx) {
@@ -373,6 +475,8 @@ impl AppView {
                 }))
                 .child(content)
                 .into_any_element()
+        } else if cell.kind == CellKind::Parameters {
+            self.render_notebook_params(index, tab_id, &cell, cx)
         } else {
             // Raw: a non-SQL code cell (Python, `%load_ext sql`, ...) kept as it is.
             div()
@@ -429,7 +533,7 @@ impl AppView {
                 })),
             );
         }
-        if cell.kind != CellKind::Raw {
+        if !matches!(cell.kind, CellKind::Raw | CellKind::Parameters) {
             let (target, label) = if cell.kind == CellKind::Sql {
                 (CellKind::Markdown, t!("notebook.cell.to_markdown"))
             } else {

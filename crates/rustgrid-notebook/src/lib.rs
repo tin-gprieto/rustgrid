@@ -5,12 +5,17 @@
 mod ipynb;
 mod model;
 mod outputs;
+mod params;
 mod sections;
 mod write;
 
 pub use ipynb::read_ipynb;
 pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding, RawKind};
 pub use outputs::results_to_outputs;
+pub use params::{
+    MissingParam, PARAMETERS_TAG, Param, ParamValue, format_parameters, is_param_name,
+    parse_parameters, substitute,
+};
 pub use sections::{COLLAPSED_KEY, hidden_cells, section_end};
 pub use write::write_ipynb;
 

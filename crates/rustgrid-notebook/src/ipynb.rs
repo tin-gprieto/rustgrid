@@ -4,6 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::model::generate_cell_id;
 use crate::{Cell, CellKind, CellOutput, Error, Notebook, NotebookBinding, RawKind, Result};
+use crate::{PARAMETERS_TAG, parse_parameters};
 
 const SQL_MAGIC: &str = "%%sql";
 
@@ -83,9 +84,23 @@ fn read_cell(index: usize, cell: Value, seen: &mut HashSet<String>) -> Result<Ce
         Some(_) => return Err(invalid(format!("cell {index} `source` is not text"))),
     };
 
+    let extra_metadata = match obj.remove("metadata") {
+        None | Some(Value::Null) => Map::new(),
+        Some(Value::Object(m)) => m,
+        Some(_) => return Err(invalid(format!("cell {index} `metadata` is not an object"))),
+    };
+    let parameters_tagged = extra_metadata
+        .get("tags")
+        .and_then(Value::as_array)
+        .is_some_and(|tags| tags.iter().any(|t| t.as_str() == Some(PARAMETERS_TAG)));
+
     let (kind, raw_kind, source, magic_args) = match cell_type.as_str() {
         "markdown" => (CellKind::Markdown, RawKind::Code, source, String::new()),
         "raw" => (CellKind::Raw, RawKind::Raw, source, String::new()),
+        // Papermill's parameters cell, as long as RustGrid can read every line of it.
+        "code" if parameters_tagged && parse_parameters(&source).is_some() => {
+            (CellKind::Parameters, RawKind::Code, source, String::new())
+        }
         "code" => match split_sql_magic(&source) {
             Some((args, body)) => (CellKind::Sql, RawKind::Code, body, args),
             None => (CellKind::Raw, RawKind::Code, source, String::new()),
@@ -104,11 +119,6 @@ fn read_cell(index: usize, cell: Value, seen: &mut HashSet<String>) -> Result<Ce
     };
     seen.insert(id.clone());
 
-    let extra_metadata = match obj.remove("metadata") {
-        None | Some(Value::Null) => Map::new(),
-        Some(Value::Object(m)) => m,
-        Some(_) => return Err(invalid(format!("cell {index} `metadata` is not an object"))),
-    };
     let outputs = match obj.remove("outputs") {
         Some(Value::Array(outs)) if kind != CellKind::Markdown => {
             outs.into_iter().map(CellOutput::Raw).collect()
@@ -194,6 +204,30 @@ mod tests {
             assert_eq!(c.raw_kind, RawKind::Code);
             assert_eq!(c.source, src);
         }
+    }
+
+    #[test]
+    fn a_tagged_assignment_cell_is_parameters() {
+        let c = one(
+            json!({"cell_type":"code","metadata":{"tags":["parameters"]},"outputs":[],
+            "source":["country = \"AR\"\n","year = 2025"]}),
+        );
+        assert_eq!(c.kind, CellKind::Parameters);
+        assert_eq!(c.source, "country = \"AR\"\nyear = 2025");
+        assert_eq!(c.parameters().len(), 2);
+    }
+
+    #[test]
+    fn a_parameters_cell_needs_the_tag_and_parseable_lines() {
+        let untagged = one(json!({"cell_type":"code","metadata":{},"outputs":[],
+            "source":"country = \"AR\""}));
+        assert_eq!(untagged.kind, CellKind::Raw);
+        let python = one(
+            json!({"cell_type":"code","metadata":{"tags":["parameters"]},
+            "outputs":[],"source":"country = get_country()"}),
+        );
+        assert_eq!(python.kind, CellKind::Raw);
+        assert_eq!(python.source, "country = get_country()");
     }
 
     #[test]

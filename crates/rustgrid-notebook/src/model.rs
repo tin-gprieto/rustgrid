@@ -30,6 +30,9 @@ pub enum CellKind {
     Markdown,
     /// A non-SQL code cell, preserved as is.
     Raw,
+    /// A code cell tagged `parameters` whose lines are `name = literal` assignments (see
+    /// [`crate::parse_parameters`]); its values expand `{{name}}` in the SQL cells below it.
+    Parameters,
 }
 
 /// The nbformat `cell_type` a [`CellKind::Raw`] cell came from, so it is written back unchanged.
@@ -83,6 +86,28 @@ impl Cell {
 
     pub fn new_markdown(source: impl Into<String>) -> Self {
         Self::new(CellKind::Markdown, source)
+    }
+
+    /// An empty parameters cell.
+    pub fn new_parameters() -> Self {
+        Self::new(CellKind::Parameters, "")
+    }
+
+    /// The parameters a [`CellKind::Parameters`] cell defines (none for any other cell, or for a
+    /// source that no longer parses).
+    pub fn parameters(&self) -> Vec<crate::Param> {
+        if self.kind != CellKind::Parameters {
+            return Vec::new();
+        }
+        crate::parse_parameters(&self.source).unwrap_or_default()
+    }
+
+    /// Whether the cell's `metadata.tags` lists `tag`.
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.extra_metadata
+            .get("tags")
+            .and_then(Value::as_array)
+            .is_some_and(|tags| tags.iter().any(|t| t.as_str() == Some(tag)))
     }
 
     /// A code cell that only loads JupySQL (`%load_ext sql` / `%reload_ext sql`, blank lines

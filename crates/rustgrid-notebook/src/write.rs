@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::model::generate_cell_id;
-use crate::{Cell, CellKind, CellOutput, Notebook, RawKind};
+use crate::{Cell, CellKind, CellOutput, Notebook, PARAMETERS_TAG, RawKind};
 
 const LOAD_EXT: &str = "%load_ext sql";
 const RELOAD_EXT: &str = "%reload_ext sql";
@@ -113,7 +113,7 @@ fn cell_json(cell: &Cell) -> Value {
     let (cell_type, source) = match cell.kind {
         CellKind::Markdown => ("markdown", cell.source.clone()),
         CellKind::Raw if cell.raw_kind == RawKind::Raw => ("raw", cell.source.clone()),
-        CellKind::Raw => ("code", cell.source.clone()),
+        CellKind::Raw | CellKind::Parameters => ("code", cell.source.clone()),
         CellKind::Sql => {
             let mut s = String::from("%%sql");
             if !cell.magic_args.is_empty() {
@@ -127,10 +127,11 @@ fn cell_json(cell: &Cell) -> Value {
     };
     obj.insert("cell_type".into(), json!(cell_type));
     obj.insert("id".into(), json!(cell.id));
-    obj.insert(
-        "metadata".into(),
-        Value::Object(cell.extra_metadata.clone()),
-    );
+    let mut metadata = cell.extra_metadata.clone();
+    if cell.kind == CellKind::Parameters {
+        tag_parameters(&mut metadata);
+    }
+    obj.insert("metadata".into(), Value::Object(metadata));
     obj.insert("source".into(), source_lines(&source));
     if cell_type == "code" {
         let outputs = cell
@@ -142,6 +143,19 @@ fn cell_json(cell: &Cell) -> Value {
         obj.insert("execution_count".into(), json!(cell.execution_count));
     }
     Value::Object(obj)
+}
+
+/// Add papermill's `parameters` tag to a cell's `metadata.tags`, keeping its other tags (and
+/// replacing a `tags` value that is not a list, which Jupyter would reject anyway).
+fn tag_parameters(metadata: &mut Map<String, Value>) {
+    let tag = json!(PARAMETERS_TAG);
+    match metadata.get_mut("tags") {
+        Some(Value::Array(tags)) if tags.contains(&tag) => {}
+        Some(Value::Array(tags)) => tags.push(tag),
+        _ => {
+            metadata.insert("tags".into(), json!([PARAMETERS_TAG]));
+        }
+    }
 }
 
 /// Jupyter style: each line keeps its `\n`, so joining the array restores the text.
@@ -277,6 +291,30 @@ mod tests {
             cells,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn parameters_cell_round_trips_with_its_tag() {
+        let mut params = Cell::new_parameters();
+        params.source = "country = \"AR\"\nyear = 2025".into();
+        params.extra_metadata.insert("tags".into(), json!(["keep"]));
+        let out = parse(&nb_with(vec![params.clone()]));
+        let cell = &out["cells"][1];
+        assert_eq!(cell["cell_type"], "code");
+        assert_eq!(cell["metadata"]["tags"], json!(["keep", "parameters"]));
+        assert_eq!(cell["source"], json!(["country = \"AR\"\n", "year = 2025"]));
+
+        let back = read_ipynb(&write_ipynb(&nb_with(vec![params]))).unwrap();
+        let back = &back.cells[1];
+        assert_eq!(back.kind, CellKind::Parameters);
+        assert_eq!(back.source, "country = \"AR\"\nyear = 2025");
+        assert_eq!(back.extra_metadata["tags"], json!(["keep", "parameters"]));
+        // Writing it again does not add a second tag.
+        let again = parse(&nb_with(vec![back.clone()]));
+        assert_eq!(
+            again["cells"][1]["metadata"]["tags"],
+            json!(["keep", "parameters"])
+        );
     }
 
     #[test]

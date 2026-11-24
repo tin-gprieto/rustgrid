@@ -2514,6 +2514,10 @@ pub struct AppView {
     /// The editor of each SQL cell, by (notebook id, cell id): cell ids are only unique within a
     /// notebook (the same file can be open twice), and keying by id survives moving a cell.
     notebook_editors: std::collections::HashMap<(u64, String), Entity<ui::SqlEditor>>,
+    /// The name / value fields of the notebooks' parameters cells, keyed by (notebook id, cell
+    /// id, row, value field). A cell's fields are dropped whenever its rows are added or removed.
+    notebook_param_inputs:
+        std::collections::HashMap<(u64, String, usize, bool), Entity<ui::TextInput>>,
     next_notebook_id: u64,
     /// The pinned database session of each notebook, by notebook id. Kept apart from the tab
     /// because a session is not `Clone` and is not tab state.
@@ -3505,6 +3509,7 @@ impl AppView {
             notebooks: Vec::new(),
             active_notebook: None,
             notebook_editors: std::collections::HashMap::new(),
+            notebook_param_inputs: std::collections::HashMap::new(),
             next_notebook_id: 0,
             notebook_sessions: std::collections::HashMap::new(),
             query_files,

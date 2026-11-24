@@ -50,9 +50,11 @@ impl AppView {
         if tab.running.is_some() {
             return CellRunStart::Skipped;
         }
-        let Some(state) = tab.cells.iter().find(|state| state.cell.id == cell_id) else {
+        let Some(cell_position) = tab.cells.iter().position(|state| state.cell.id == cell_id)
+        else {
             return CellRunStart::Skipped;
         };
+        let state = &tab.cells[cell_position];
         if state.cell.kind != rustgrid_notebook::CellKind::Sql {
             return CellRunStart::Skipped;
         }
@@ -61,6 +63,24 @@ impl AppView {
         if source.is_empty() {
             return CellRunStart::Skipped;
         }
+        // `{{name}}` takes the value of the parameters cells above; an undefined name fails the
+        // cell before anything runs.
+        let source = if source.contains("{{") {
+            match rustgrid_notebook::substitute(&source, &tab.params_before(cell_position)) {
+                Ok(source) => source,
+                Err(missing) => {
+                    self.notebooks[position].fail_cell(
+                        &cell_id,
+                        t!("notebook.param.missing", name = missing.0).to_string(),
+                    );
+                    self.set_notebook_cell_grids(position, &cell_id, Vec::new(), cx);
+                    cx.notify();
+                    return CellRunStart::Failed;
+                }
+            }
+        } else {
+            source
+        };
         let database = tab.database.clone();
         let connection_index = tab.connection_index;
         let Some(connection) = connection_index.and_then(|index| self.connection_arc(index)) else {
@@ -318,7 +338,8 @@ impl AppView {
                 }
                 tab.set_markdown_editing(cell, false);
             }
-            rustgrid_notebook::CellKind::Raw => {}
+            // A parameters cell has nothing to run: Shift+Enter just moves on.
+            rustgrid_notebook::CellKind::Raw | rustgrid_notebook::CellKind::Parameters => {}
         }
         cx.notify();
         true
@@ -343,7 +364,7 @@ impl AppView {
         let has_editor = match state.cell.kind {
             rustgrid_notebook::CellKind::Sql => true,
             rustgrid_notebook::CellKind::Markdown => state.editing,
-            rustgrid_notebook::CellKind::Raw => false,
+            rustgrid_notebook::CellKind::Raw | rustgrid_notebook::CellKind::Parameters => false,
         };
         let cell_id = state.cell.id.clone();
         if has_editor && let Some(editor) = self.ensure_notebook_editor(index, &cell_id, cx) {
@@ -475,7 +496,7 @@ impl AppView {
             let Some(position) = self.notebook_position(tab_id) else {
                 return;
             };
-            next = self.notebooks[position].next_queued(outcome == CellRunStart::Skipped);
+            next = self.notebooks[position].next_queued(&cell_id, outcome == CellRunStart::Skipped);
         }
     }
 
@@ -523,7 +544,7 @@ impl AppView {
             self.notebook_sessions.insert(tab_id, session);
         }
         if installed {
-            let next = self.notebooks[position].next_queued(succeeded);
+            let next = self.notebooks[position].next_queued(cell_id, succeeded);
             self.run_queued_notebook_cells(tab_id, next, cx);
         }
         cx.notify();
@@ -643,6 +664,110 @@ impl AppView {
     }
 }
 
+/// Parameters cells: the name / value table.
+impl AppView {
+    /// Forget the name / value fields of the cell `cell_id`; they are built again, from its rows,
+    /// on the next render.
+    pub(super) fn drop_notebook_param_inputs(&mut self, tab_id: u64, cell_id: &str) {
+        self.notebook_param_inputs
+            .retain(|(id, cell, _, _), _| !(*id == tab_id && cell == cell_id));
+    }
+
+    /// The name (`value == false`) or value field of row `row` of the parameters cell `cell_id`,
+    /// created on first use with `text`. Typing edits the row (and the cell's source).
+    pub(super) fn notebook_param_input(
+        &mut self,
+        tab_id: u64,
+        cell_id: &str,
+        row: usize,
+        value: bool,
+        text: &str,
+        cx: &mut Context<'_, Self>,
+    ) -> Entity<ui::TextInput> {
+        let key = (tab_id, cell_id.to_string(), row, value);
+        if let Some(input) = self.notebook_param_inputs.get(&key) {
+            return input.clone();
+        }
+        let theme = self.theme;
+        let placeholder = if value {
+            t!("notebook.param.value")
+        } else {
+            t!("notebook.param.name")
+        };
+        let options = ui::TextInputOptions {
+            placeholder: placeholder.to_string().into(),
+            ..Default::default()
+        };
+        let weak = cx.weak_entity();
+        let cell_id = cell_id.to_string();
+        let initial = text.to_string();
+        let input = cx.new(move |cx| {
+            ui::TextInput::new(theme, initial, options, cx).on_change(Rc::new(
+                move |text, _window, cx| {
+                    let _ = weak.update(cx, |app, cx| {
+                        let Some(position) = app.notebook_position(tab_id) else {
+                            return;
+                        };
+                        let tab = &mut app.notebooks[position];
+                        let was_dirty = tab.dirty;
+                        if value {
+                            tab.set_param(&cell_id, row, None, Some(text));
+                        } else {
+                            tab.set_param(&cell_id, row, Some(text), None);
+                        }
+                        // The tab's `*` on the first edit; the fields draw themselves.
+                        if !was_dirty && tab.dirty {
+                            cx.notify();
+                        }
+                    });
+                },
+            ))
+        });
+        self.notebook_param_inputs.insert(key, input.clone());
+        input
+    }
+
+    /// `+` on a row of the parameters cell at `cell`: an empty row under it.
+    pub(super) fn add_notebook_param_row(
+        &mut self,
+        index: usize,
+        cell: usize,
+        after: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let Some(cell_id) = tab.cells.get(cell).map(|state| state.cell.id.clone()) else {
+            return;
+        };
+        tab.add_param_row(cell, after);
+        let tab_id = tab.id;
+        self.drop_notebook_param_inputs(tab_id, &cell_id);
+        cx.notify();
+    }
+
+    /// `−` on a row of the parameters cell at `cell`.
+    pub(super) fn remove_notebook_param_row(
+        &mut self,
+        index: usize,
+        cell: usize,
+        row: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        let Some(cell_id) = tab.cells.get(cell).map(|state| state.cell.id.clone()) else {
+            return;
+        };
+        tab.remove_param_row(cell, row);
+        let tab_id = tab.id;
+        self.drop_notebook_param_inputs(tab_id, &cell_id);
+        cx.notify();
+    }
+}
+
 impl AppView {
     /// Release what an open notebook holds outside its cells: stop a running cell, drop the
     /// pinned session (released on the runtime) and drop the cells' result grids. The cells and
@@ -667,6 +792,8 @@ impl AppView {
         };
         self.release_notebook_resources(position, cx);
         self.notebook_editors.retain(|(id, _), _| *id != tab_id);
+        self.notebook_param_inputs
+            .retain(|(id, _, _, _), _| *id != tab_id);
         self.notebooks.remove(position);
         match self.active_notebook {
             Some(active) if active == position => {
@@ -1059,6 +1186,7 @@ impl AppView {
         };
         let cell = match kind {
             rustgrid_notebook::CellKind::Markdown => rustgrid_notebook::Cell::new_markdown(""),
+            rustgrid_notebook::CellKind::Parameters => rustgrid_notebook::Cell::new_parameters(),
             _ => rustgrid_notebook::Cell::new_sql(""),
         };
         let at = if tab.cells.is_empty() {
@@ -1139,6 +1267,7 @@ impl AppView {
             return;
         }
         let tab_id = tab.id;
+        self.drop_notebook_param_inputs(tab_id, &cell_id);
         self.notebook_editors.remove(&(tab_id, cell_id));
         self.remove_grids_by_id(&grids, cx);
         cx.notify();

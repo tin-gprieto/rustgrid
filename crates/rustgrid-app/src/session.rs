@@ -787,18 +787,50 @@ pub struct NotebookCellState {
     pub error: Option<String>,
     /// How long the last run took.
     pub elapsed: Option<std::time::Duration>,
+    /// Parameters cells: the rows of the name / value table. A row whose name is not a valid
+    /// parameter name (still being typed, or blank) stays here but is left out of the source.
+    pub param_rows: Vec<rustgrid_notebook::Param>,
 }
 
 #[allow(dead_code)] // wired to the UI and execution in later notebook stages
 impl NotebookCellState {
     pub fn new(cell: rustgrid_notebook::Cell) -> Self {
+        let mut param_rows = cell.parameters();
+        // A new parameters cell starts with one row to type into.
+        if cell.kind == rustgrid_notebook::CellKind::Parameters && param_rows.is_empty() {
+            param_rows.push(blank_param());
+        }
         Self {
             cell,
             editing: false,
             result_grids: Vec::new(),
             error: None,
             elapsed: None,
+            param_rows,
         }
+    }
+
+    /// Rewrite a parameters cell's source from its rows; returns whether it changed.
+    fn sync_param_source(&mut self) -> bool {
+        let valid: Vec<_> = self
+            .param_rows
+            .iter()
+            .filter(|param| rustgrid_notebook::is_param_name(&param.name))
+            .cloned()
+            .collect();
+        let source = rustgrid_notebook::format_parameters(&valid);
+        if source == self.cell.source {
+            return false;
+        }
+        self.cell.source = source;
+        true
+    }
+}
+
+fn blank_param() -> rustgrid_notebook::Param {
+    rustgrid_notebook::Param {
+        name: String::new(),
+        value: rustgrid_notebook::ParamValue::Text(String::new()),
     }
 }
 
@@ -828,6 +860,8 @@ pub struct NotebookTab {
     pub run_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Run All: the ids of the SQL cells still to run after the running one, in order.
     run_queue: std::collections::VecDeque<String>,
+    /// A Run All is in progress (its queue may already be empty while its last cell runs).
+    running_all: bool,
     /// The connection id the file was loaded with. The id may name a profile this machine does
     /// not have (`connection_index` is then `None`), and it must survive a save so the binding is
     /// not stripped from the file; an explicit [`NotebookTab::set_binding`] clears it.
@@ -872,6 +906,7 @@ impl NotebookTab {
             dirty: false,
             run_cancel: None,
             run_queue: std::collections::VecDeque::new(),
+            running_all: false,
             base: notebook,
             loader_cells,
         }
@@ -910,6 +945,73 @@ impl NotebookTab {
         }
     }
 
+    /// Edit row `row` of the parameters cell `cell_id`: its name and/or its value (typed text, see
+    /// [`rustgrid_notebook::ParamValue::from_input`]). Only a change to the saved source marks
+    /// the tab dirty.
+    pub fn set_param(
+        &mut self,
+        cell_id: &str,
+        row: usize,
+        name: Option<&str>,
+        value: Option<&str>,
+    ) {
+        let Some(state) = self.cells.iter_mut().find(|state| state.cell.id == cell_id) else {
+            return;
+        };
+        let Some(param) = state.param_rows.get_mut(row) else {
+            return;
+        };
+        if let Some(name) = name {
+            param.name = name.trim().to_string();
+        }
+        if let Some(value) = value {
+            param.value = rustgrid_notebook::ParamValue::from_input(value);
+        }
+        if state.sync_param_source() {
+            self.dirty = true;
+        }
+    }
+
+    /// Add an empty row under row `after` of the parameters cell at `index` (at the end when
+    /// `after` is past it).
+    pub fn add_param_row(&mut self, index: usize, after: usize) {
+        if let Some(state) = self.cells.get_mut(index)
+            && state.cell.kind == rustgrid_notebook::CellKind::Parameters
+        {
+            let at = (after + 1).min(state.param_rows.len());
+            state.param_rows.insert(at, blank_param());
+        }
+    }
+
+    /// Remove row `row` of the parameters cell at `index`. The last row is emptied rather than
+    /// removed, so the table always has a row to type into.
+    pub fn remove_param_row(&mut self, index: usize, row: usize) {
+        let Some(state) = self.cells.get_mut(index) else {
+            return;
+        };
+        if row >= state.param_rows.len() {
+            return;
+        }
+        if state.param_rows.len() == 1 {
+            state.param_rows[0] = blank_param();
+        } else {
+            state.param_rows.remove(row);
+        }
+        if state.sync_param_source() {
+            self.dirty = true;
+        }
+    }
+
+    /// The parameters an SQL cell at `index` sees: those of every parameters cell above it, in
+    /// order, so a later definition of a name wins in [`rustgrid_notebook::substitute`].
+    pub fn params_before(&self, index: usize) -> Vec<rustgrid_notebook::Param> {
+        self.cells
+            .iter()
+            .take(index)
+            .flat_map(|state| state.cell.parameters())
+            .collect()
+    }
+
     /// Run All from `from`: queue every SQL cell at or after it and return the first one to run.
     pub fn queue_run_all(&mut self, from: usize) -> Option<String> {
         self.run_queue = self
@@ -919,16 +1021,30 @@ impl NotebookTab {
             .filter(|state| state.cell.kind == rustgrid_notebook::CellKind::Sql)
             .map(|state| state.cell.id.clone())
             .collect();
+        self.running_all = true;
         self.run_queue.pop_front()
     }
 
-    /// After a queued cell finished: the next cell to run, or `None` when the queue is done. A
-    /// failed cell ends Run All (as in Jupyter), so the rest of the queue is dropped.
-    pub fn next_queued(&mut self, succeeded: bool) -> Option<String> {
+    /// After the cell `finished` ended: the next cell to run, or `None` when the queue is done. A
+    /// failed cell ends Run All (as in Jupyter): the rest of the queue is dropped and the failed
+    /// cell is selected (and unfolded), so the error is what the user looks at.
+    pub fn next_queued(&mut self, finished: &str, succeeded: bool) -> Option<String> {
         if !succeeded {
+            if self.running_all
+                && let Some(index) = self
+                    .cells
+                    .iter()
+                    .position(|state| state.cell.id == finished)
+            {
+                self.select_cell(index);
+            }
             self.run_queue.clear();
         }
-        self.run_queue.pop_front()
+        let next = self.run_queue.pop_front();
+        if next.is_none() {
+            self.running_all = false;
+        }
+        next
     }
 
     pub fn set_cell_source(&mut self, index: usize, source: String) {
@@ -1052,13 +1168,15 @@ impl NotebookTab {
     #[must_use]
     pub fn set_cell_kind(&mut self, index: usize, kind: rustgrid_notebook::CellKind) -> Vec<u64> {
         use rustgrid_notebook::CellKind;
-        if kind == CellKind::Raw || self.running == Some(index) {
+        if matches!(kind, CellKind::Raw | CellKind::Parameters) || self.running == Some(index) {
             return Vec::new();
         }
         let Some(state) = self.cells.get_mut(index) else {
             return Vec::new();
         };
-        if state.cell.kind == kind || state.cell.kind == CellKind::Raw {
+        if state.cell.kind == kind
+            || matches!(state.cell.kind, CellKind::Raw | CellKind::Parameters)
+        {
             return Vec::new();
         }
         state.cell.kind = kind;
@@ -1235,6 +1353,7 @@ impl NotebookTab {
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.run_queue.clear();
+        self.running_all = false;
         self.run_generation = self.run_generation.wrapping_add(1);
         self.running = None;
         was_running
@@ -2236,6 +2355,56 @@ mod tests {
             assert_eq!(again.cells[0].id, loader_id, "the original loader is kept");
         }
 
+        #[test]
+        fn parameter_rows_edit_the_source_and_reach_the_cells_below() {
+            let notebook = rustgrid_notebook::Notebook {
+                cells: vec![
+                    rustgrid_notebook::Cell::new_sql("select 0"),
+                    rustgrid_notebook::Cell::new_parameters(),
+                    rustgrid_notebook::Cell::new_sql("select '{{c}}'"),
+                ],
+                ..Default::default()
+            };
+            let mut tab = NotebookTab::from_notebook(1, notebook, None, None);
+            let id = tab.cells[1].cell.id.clone();
+            assert_eq!(tab.cells[1].param_rows.len(), 1, "a blank row to type into");
+
+            // A name still being typed is kept in the table but not in the source.
+            tab.set_param(&id, 0, Some("1"), Some("AR"));
+            assert_eq!(tab.cells[1].cell.source, "");
+            assert!(!tab.dirty);
+            tab.set_param(&id, 0, Some("c"), None);
+            assert_eq!(tab.cells[1].cell.source, "c = \"AR\"");
+            assert!(tab.dirty);
+
+            tab.add_param_row(1, 0);
+            tab.set_param(&id, 1, Some("n"), Some("7"));
+            assert_eq!(tab.cells[1].cell.source, "c = \"AR\"\nn = 7");
+
+            assert!(tab.params_before(1).is_empty());
+            let params = tab.params_before(2);
+            assert_eq!(
+                rustgrid_notebook::substitute("{{c}}-{{n}}", &params).unwrap(),
+                "AR-7"
+            );
+
+            tab.remove_param_row(1, 0);
+            assert_eq!(tab.cells[1].cell.source, "n = 7");
+            tab.remove_param_row(1, 0);
+            assert_eq!(tab.cells[1].param_rows.len(), 1);
+            assert_eq!(tab.cells[1].cell.source, "");
+
+            // A parameters cell cannot be retyped.
+            assert!(
+                tab.set_cell_kind(1, rustgrid_notebook::CellKind::Sql)
+                    .is_empty()
+            );
+            assert_eq!(
+                tab.cells[1].cell.kind,
+                rustgrid_notebook::CellKind::Parameters
+            );
+        }
+
         fn sql_tab() -> NotebookTab {
             let notebook = rustgrid_notebook::Notebook {
                 cells: vec![
@@ -2421,21 +2590,26 @@ mod tests {
             let first = tab.cells[0].cell.id.clone();
             let last = tab.cells[2].cell.id.clone();
             assert_eq!(tab.queue_run_all(0), Some(first));
-            assert_eq!(tab.next_queued(true), Some(last.clone()));
-            assert_eq!(tab.next_queued(true), None);
+            assert_eq!(tab.next_queued("", true), Some(last.clone()));
+            assert_eq!(tab.next_queued("", true), None);
 
             // From a later cell only the cells below it run.
             assert_eq!(tab.queue_run_all(1), Some(last));
-            assert_eq!(tab.next_queued(true), None);
+            assert_eq!(tab.next_queued("", true), None);
 
-            // A failure drops the rest.
-            assert!(tab.queue_run_all(0).is_some());
-            assert_eq!(tab.next_queued(false), None);
+            // A failure drops the rest and selects the failed cell.
+            let first = tab.queue_run_all(0).unwrap();
+            tab.selected = 2;
+            assert_eq!(tab.next_queued(&first, false), None);
+            assert_eq!(tab.selected, 0);
+            // A single run that fails does not move the selection.
+            assert_eq!(tab.next_queued(&tab.cells[2].cell.id.clone(), false), None);
+            assert_eq!(tab.selected, 0);
 
             // So does Stop.
             assert!(tab.queue_run_all(0).is_some());
             tab.stop_run();
-            assert_eq!(tab.next_queued(true), None);
+            assert_eq!(tab.next_queued("", true), None);
         }
 
         #[test]
