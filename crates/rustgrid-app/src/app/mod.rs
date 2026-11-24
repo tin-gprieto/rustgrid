@@ -3186,6 +3186,7 @@ mod info_pane;
 mod keymap;
 pub(crate) mod line_edit;
 mod list_ops;
+mod notebook;
 mod objects;
 mod options;
 mod options_mcp;

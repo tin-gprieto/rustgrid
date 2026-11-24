@@ -824,6 +824,8 @@ pub struct NotebookTab {
     pub execution_counter: u32,
     /// Unsaved edits exist.
     pub dirty: bool,
+    /// Set by Stop: the running cell skips its remaining statements.
+    pub run_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The connection id the file was loaded with. The id may name a profile this machine does
     /// not have (`connection_index` is then `None`), and it must survive a save so the binding is
     /// not stripped from the file; an explicit [`NotebookTab::set_binding`] clears it.
@@ -861,6 +863,7 @@ impl NotebookTab {
             run_generation: 0,
             execution_counter,
             dirty: false,
+            run_cancel: None,
             base: notebook,
         }
     }
@@ -919,6 +922,86 @@ impl NotebookTab {
         self.cells.insert(to, state);
         self.selected = to;
         self.dirty = true;
+    }
+
+    /// Mark the cell `cell_id` as running and return the run's generation and cancel flag. The
+    /// caller hands both back to [`NotebookTab::finish_run`] / checks the flag between statements.
+    pub fn begin_run(
+        &mut self,
+        cell_id: &str,
+    ) -> Option<(u64, Arc<std::sync::atomic::AtomicBool>)> {
+        let index = self
+            .cells
+            .iter()
+            .position(|state| state.cell.id == cell_id)?;
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.running = Some(index);
+        self.run_generation = self.run_generation.wrapping_add(1);
+        self.run_cancel = Some(cancel.clone());
+        let state = &mut self.cells[index];
+        state.error = None;
+        state.elapsed = None;
+        Some((self.run_generation, cancel))
+    }
+
+    /// Install a finished run on the cell `cell_id` (found by id, so a cell moved while it ran
+    /// still gets its own results). `results` are the result sets of the statements that ran,
+    /// `error` the failure that stopped the run, if any. Returns `false` — and changes nothing —
+    /// when the run is stale (Stop/Restart bumped the generation) or the cell was removed.
+    pub fn finish_run(
+        &mut self,
+        cell_id: &str,
+        generation: u64,
+        elapsed: std::time::Duration,
+        results: &[rustgrid_core::QueryResult],
+        error: Option<String>,
+        max_rows: usize,
+    ) -> bool {
+        if generation != self.run_generation {
+            return false;
+        }
+        self.running = None;
+        self.run_cancel = None;
+        let Some(state) = self.cells.iter_mut().find(|state| state.cell.id == cell_id) else {
+            return false;
+        };
+        self.execution_counter = self.execution_counter.saturating_add(1);
+        let mut outputs = rustgrid_notebook::results_to_outputs(results, max_rows);
+        if let Some(message) = &error {
+            outputs.push(rustgrid_notebook::CellOutput::Error {
+                message: message.clone(),
+            });
+        }
+        state.cell.outputs = outputs;
+        state.cell.execution_count = Some(self.execution_counter);
+        state.error = error;
+        state.elapsed = Some(elapsed);
+        self.dirty = true;
+        true
+    }
+
+    /// Fail the cell `cell_id` without running it (e.g. the connection is not open).
+    pub fn fail_cell(&mut self, cell_id: &str, message: String) {
+        if let Some(state) = self.cells.iter_mut().find(|state| state.cell.id == cell_id) {
+            state.cell.outputs = vec![rustgrid_notebook::CellOutput::Error {
+                message: message.clone(),
+            }];
+            state.error = Some(message);
+            state.elapsed = None;
+            self.dirty = true;
+        }
+    }
+
+    /// Stop the running cell: its remaining statements are skipped and its late result is
+    /// discarded. Returns whether a run was in progress.
+    pub fn stop_run(&mut self) -> bool {
+        let was_running = self.running.is_some();
+        if let Some(cancel) = self.run_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.run_generation = self.run_generation.wrapping_add(1);
+        self.running = None;
+        was_running
     }
 
     pub fn set_binding(
@@ -1877,6 +1960,137 @@ mod tests {
             assert!(tab.dirty);
             assert_eq!(tab.connection_index, Some(3));
             assert_eq!(tab.database.as_deref(), Some("d"));
+        }
+
+        fn sql_tab() -> NotebookTab {
+            let notebook = rustgrid_notebook::Notebook {
+                cells: vec![
+                    rustgrid_notebook::Cell::new_sql("select 1"),
+                    rustgrid_notebook::Cell::new_sql("select 2"),
+                ],
+                ..Default::default()
+            };
+            NotebookTab::from_notebook(1, notebook, None, None)
+        }
+
+        fn result_set() -> rustgrid_core::QueryResult {
+            rustgrid_core::QueryResult {
+                statement: "select 1".into(),
+                columns: vec![rustgrid_core::ColumnInfo {
+                    name: "a".into(),
+                    data_type: String::new(),
+                    nullable: true,
+                    primary_key: false,
+                    auto_increment: false,
+                    generated: false,
+                    comment: String::new(),
+                }],
+                rows: vec![vec![rustgrid_core::CellValue::Text("1".into())]],
+                rows_affected: 0,
+                has_result_set: true,
+                last_insert_id: None,
+            }
+        }
+
+        #[test]
+        fn finished_run_fills_the_cell() {
+            let mut tab = sql_tab();
+            let id = tab.cells[1].cell.id.clone();
+            let (generation, _) = tab.begin_run(&id).unwrap();
+            assert_eq!(tab.running, Some(1));
+            let elapsed = std::time::Duration::from_millis(5);
+            assert!(tab.finish_run(&id, generation, elapsed, &[result_set()], None, 100));
+            assert_eq!(tab.running, None);
+            assert!(tab.dirty);
+            let state = &tab.cells[1];
+            assert_eq!(state.cell.execution_count, Some(1));
+            assert_eq!(state.elapsed, Some(elapsed));
+            assert!(state.error.is_none());
+            assert!(matches!(
+                state.cell.outputs.as_slice(),
+                [rustgrid_notebook::CellOutput::Table { .. }]
+            ));
+
+            // The counter keeps counting across cells.
+            let other = tab.cells[0].cell.id.clone();
+            let (generation, _) = tab.begin_run(&other).unwrap();
+            assert!(tab.finish_run(&other, generation, elapsed, &[], None, 100));
+            assert_eq!(tab.cells[0].cell.execution_count, Some(2));
+        }
+
+        #[test]
+        fn failed_run_keeps_earlier_results_and_appends_the_error() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            let (generation, _) = tab.begin_run(&id).unwrap();
+            let ok = tab.finish_run(
+                &id,
+                generation,
+                std::time::Duration::ZERO,
+                &[result_set()],
+                Some("boom".into()),
+                100,
+            );
+            assert!(ok);
+            let state = &tab.cells[0];
+            assert_eq!(state.error.as_deref(), Some("boom"));
+            assert!(matches!(
+                state.cell.outputs.as_slice(),
+                [
+                    rustgrid_notebook::CellOutput::Table { .. },
+                    rustgrid_notebook::CellOutput::Error { message }
+                ] if message == "boom"
+            ));
+        }
+
+        #[test]
+        fn stale_run_is_discarded_after_stop() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            let (generation, cancel) = tab.begin_run(&id).unwrap();
+            assert!(tab.stop_run());
+            assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+            assert_eq!(tab.running, None);
+            let installed = tab.finish_run(
+                &id,
+                generation,
+                std::time::Duration::ZERO,
+                &[result_set()],
+                None,
+                100,
+            );
+            assert!(!installed);
+            assert!(tab.cells[0].cell.outputs.is_empty());
+            assert_eq!(tab.cells[0].cell.execution_count, None);
+            assert!(!tab.stop_run());
+        }
+
+        #[test]
+        fn result_follows_a_moved_cell() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            let (generation, _) = tab.begin_run(&id).unwrap();
+            tab.move_cell(0, 1);
+            assert!(tab.finish_run(
+                &id,
+                generation,
+                std::time::Duration::ZERO,
+                &[result_set()],
+                None,
+                100
+            ));
+            assert_eq!(tab.cells[1].cell.execution_count, Some(1));
+            assert_eq!(tab.cells[0].cell.execution_count, None);
+        }
+
+        #[test]
+        fn failing_a_cell_records_the_error() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            tab.fail_cell(&id, "not connected".into());
+            assert_eq!(tab.cells[0].error.as_deref(), Some("not connected"));
+            assert_eq!(tab.cells[0].cell.outputs.len(), 1);
+            assert!(tab.dirty);
         }
 
         #[test]
