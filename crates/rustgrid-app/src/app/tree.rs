@@ -321,6 +321,8 @@ impl AppView {
         }
         self.active_query =
             active_query_id.and_then(|id| self.queries.iter().position(|tab| tab.id == id));
+        // Notebooks are files with possibly unsaved cells, so they are unbound rather than closed.
+        self.notebooks_connection_removed(index);
 
         if let Some(editing) = self.editing {
             match editing.cmp(&index) {
@@ -598,6 +600,9 @@ impl AppView {
             self.selected_user = None;
             self.info_user = Loadable::Idle;
         }
+
+        // Before the connection's grids go: a notebook's cells must forget the grid ids too.
+        self.release_connection_notebooks(index, cx);
 
         if let Some(connection) = connection {
             self.close_connection_grids(&connection, cx);

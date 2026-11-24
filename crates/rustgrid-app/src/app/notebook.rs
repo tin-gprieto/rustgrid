@@ -264,6 +264,56 @@ impl AppView {
     }
 }
 
+impl AppView {
+    /// Release what an open notebook holds outside its cells: stop a running cell, drop the
+    /// pinned session (released on the runtime) and drop the cells' result grids. The cells and
+    /// their saved outputs stay, so the notebook can run again once its connection is back.
+    fn release_notebook_resources(&mut self, position: usize, cx: &mut Context<'_, Self>) {
+        let Some(tab) = self.notebooks.get_mut(position) else {
+            return;
+        };
+        tab.stop_run();
+        let tab_id = tab.id;
+        let grids = tab.take_result_grids();
+        self.notebook_sessions.remove(&tab_id);
+        self.remove_grids_by_id(&grids, cx);
+    }
+
+    /// Close notebook `tab_id`: release its session and grids and drop the tab. Unsaved changes
+    /// are the caller's to confirm.
+    #[allow(dead_code)] // called by the tab bar's close in the notebook view stage
+    pub(super) fn close_notebook(&mut self, tab_id: u64, cx: &mut Context<'_, Self>) {
+        let Some(position) = self.notebook_position(tab_id) else {
+            return;
+        };
+        self.release_notebook_resources(position, cx);
+        self.notebooks.remove(position);
+        cx.notify();
+    }
+
+    /// The connection at `connection_index` is being closed: every notebook bound to it loses its
+    /// session and result grids (they would hold a dead connection), but stays open.
+    pub(super) fn release_connection_notebooks(
+        &mut self,
+        connection_index: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        for position in 0..self.notebooks.len() {
+            if self.notebooks[position].connection_index == Some(connection_index) {
+                self.release_notebook_resources(position, cx);
+            }
+        }
+    }
+
+    /// The connection at `removed` was deleted from the list: keep every notebook's connection
+    /// index naming the same profile, and leave the deleted connection's notebooks unbound.
+    pub(super) fn notebooks_connection_removed(&mut self, removed: usize) {
+        for tab in &mut self.notebooks {
+            tab.connection_removed(removed);
+        }
+    }
+}
+
 /// The result sets of the statements that ran, in order, and the error that stopped the cell.
 fn flatten_outcomes(outcomes: Vec<StatementOutcome>) -> (Vec<QueryResult>, Option<String>) {
     let mut results = Vec::new();

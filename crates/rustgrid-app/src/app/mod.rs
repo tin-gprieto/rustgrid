@@ -2472,11 +2472,9 @@ pub struct AppView {
     active_query: Option<usize>,
     next_query_id: u64,
     /// Open SQL notebook tabs.
-    #[allow(dead_code)] // used from the notebook execution stage
     notebooks: Vec<crate::session::NotebookTab>,
     /// The pinned database session of each notebook, by notebook id. Kept apart from the tab
     /// because a session is not `Clone` and is not tab state.
-    #[allow(dead_code)] // used from the notebook execution stage
     notebook_sessions: std::collections::HashMap<u64, runsql::ScriptSessionGuard>,
     /// Saved queries, as individual `.sql` files under the config dir's `queries/` tree.
     query_files: Vec<QueryFileInfo>,

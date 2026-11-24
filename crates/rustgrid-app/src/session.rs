@@ -931,12 +931,36 @@ impl NotebookTab {
         }
     }
 
-    /// Every result grid id the notebook's cells own.
-    pub fn all_grid_ids(&self) -> Vec<u64> {
+    /// Take every result grid id the notebook's cells own, leaving the cells without grids (their
+    /// saved `outputs` stay). The caller drops the returned grids from `AppView::grids`.
+    #[must_use]
+    pub fn take_result_grids(&mut self) -> Vec<u64> {
         self.cells
-            .iter()
-            .flat_map(|state| state.result_grids.iter().flatten().copied())
+            .iter_mut()
+            .flat_map(|state| {
+                std::mem::take(&mut state.result_grids)
+                    .into_iter()
+                    .flatten()
+            })
             .collect()
+    }
+
+    /// Keep `connection_index` naming the same profile after the connection at `removed` was
+    /// deleted from the connection list. A notebook bound to the deleted connection is left
+    /// unbound (its cells and the binding the file was loaded with are kept). Returns whether it
+    /// was bound to it.
+    pub fn connection_removed(&mut self, removed: usize) -> bool {
+        match self.connection_index {
+            Some(index) if index == removed => {
+                self.connection_index = None;
+                true
+            }
+            Some(index) if index > removed => {
+                self.connection_index = Some(index - 1);
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Move a cell to position `to` and keep it selected.
@@ -2119,17 +2143,51 @@ mod tests {
                     .is_empty()
             );
             assert!(tab.replace_result_grids(&second, vec![Some(3)]).is_empty());
-            assert_eq!(tab.all_grid_ids(), vec![1, 2, 3]);
 
             assert_eq!(tab.replace_result_grids(&first, vec![Some(4)]), vec![1, 2]);
-            assert_eq!(tab.all_grid_ids(), vec![4, 3]);
 
             // A cell that is gone cannot own the new grids.
             assert_eq!(tab.replace_result_grids("missing", vec![Some(5)]), vec![5]);
 
             assert_eq!(tab.remove_cell(1), vec![3]);
-            assert_eq!(tab.all_grid_ids(), vec![4]);
             assert!(tab.remove_cell(9).is_empty());
+            assert_eq!(tab.take_result_grids(), vec![4]);
+        }
+
+        #[test]
+        fn taking_result_grids_keeps_outputs() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            let (generation, _) = tab.begin_run(&id).unwrap();
+            assert!(tab.finish_run(
+                &id,
+                generation,
+                std::time::Duration::ZERO,
+                &[result_set()],
+                None,
+                100
+            ));
+            let _ = tab.replace_result_grids(&id, vec![Some(7)]);
+            let second = tab.cells[1].cell.id.clone();
+            let _ = tab.replace_result_grids(&second, vec![None, Some(8)]);
+            assert_eq!(tab.take_result_grids(), vec![7, 8]);
+            assert!(tab.take_result_grids().is_empty());
+            assert!(tab.cells.iter().all(|state| state.result_grids.is_empty()));
+            assert_eq!(tab.cells[0].cell.outputs.len(), 1);
+        }
+
+        #[test]
+        fn deleting_a_connection_shifts_or_unbinds() {
+            let mut tab = sql_tab();
+            tab.connection_index = Some(2);
+            assert!(!tab.connection_removed(3));
+            assert_eq!(tab.connection_index, Some(2));
+            assert!(!tab.connection_removed(0));
+            assert_eq!(tab.connection_index, Some(1));
+            assert!(tab.connection_removed(1));
+            assert_eq!(tab.connection_index, None);
+            assert!(!tab.connection_removed(0));
+            assert!(!tab.dirty);
         }
 
         #[test]
