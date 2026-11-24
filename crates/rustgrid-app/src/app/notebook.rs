@@ -594,6 +594,21 @@ impl AppView {
         cx.notify();
     }
 
+    /// Close the notebook at `index` from its tab (✕, middle click, Ctrl+W), asking first when it
+    /// has unsaved changes.
+    pub(super) fn request_close_notebook(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        let Some(tab) = self.notebooks.get(index) else {
+            return;
+        };
+        if tab.dirty {
+            self.unsaved_confirm = Some(PendingAction::CloseNotebook { id: tab.id });
+            cx.notify();
+            return;
+        }
+        let id = tab.id;
+        self.close_notebook(id, cx);
+    }
+
     /// Close every notebook tab (Close Other / Close All Tabs).
     pub(super) fn close_all_notebooks(&mut self, cx: &mut Context<'_, Self>) {
         while let Some(id) = self.notebooks.last().map(|tab| tab.id) {

@@ -373,11 +373,7 @@ impl AppView {
             TabTarget::Grid(index) => self.close_grid(index, cx),
             TabTarget::Query(index) => self.close_query(index, cx),
             TabTarget::Design(index) => self.close_design(index, cx),
-            TabTarget::Notebook(index) => {
-                if let Some(id) = self.notebooks.get(index).map(|tab| tab.id) {
-                    self.close_notebook(id, cx);
-                }
-            }
+            TabTarget::Notebook(index) => self.request_close_notebook(index, cx),
         }
     }
 

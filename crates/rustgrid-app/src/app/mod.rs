@@ -2301,6 +2301,8 @@ enum PendingAction {
     CloseQuery { index: usize },
     /// Close the table designer at `index`.
     CloseDesign { index: usize },
+    /// Close the notebook with this id (an id, not an index: tabs can shift meanwhile).
+    CloseNotebook { id: u64 },
     /// Close every query/design tab (the tab menu's Close All).
     CloseAllTabs,
     /// Close every tab except `keep` (the tab menu's Close Others).

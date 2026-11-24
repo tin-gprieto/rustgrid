@@ -499,6 +499,7 @@ impl AppView {
     pub(super) fn has_unsaved_changes(&self, cx: &App) -> bool {
         self.queries.iter().any(|tab| tab.is_dirty())
             || self.designs.iter().any(|design| design.read(cx).dirty)
+            || self.notebooks.iter().any(|tab| tab.dirty)
             || self.grids.iter().any(|grid| {
                 let grid = grid.read(cx);
                 !grid.state.edits.is_empty() || !grid.inserts.is_empty()
@@ -555,6 +556,7 @@ impl AppView {
             PendingAction::DisconnectMany { indexes } => self.disconnect_many(indexes, cx),
             PendingAction::CloseQuery { index } => self.close_query_now(index, cx),
             PendingAction::CloseDesign { index } => self.close_design_now(index, cx),
+            PendingAction::CloseNotebook { id } => self.close_notebook(id, cx),
             PendingAction::CloseAllTabs => self.close_all_tabs_now(cx),
             PendingAction::CloseOtherTabs { keep } => self.close_other_tabs_now(keep, cx),
             PendingAction::CloseRightTabs { keep } => self.close_tabs_to_right_now(keep, cx),
