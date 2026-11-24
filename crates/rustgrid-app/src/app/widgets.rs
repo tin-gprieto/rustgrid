@@ -204,6 +204,19 @@ impl AppView {
                         this.open_new_query_for_connection(index, cx);
                     }),
                 ));
+                // A notebook runs SQL cells, so key-value and document stores do not offer one.
+                if !self.driver_supports(index, DriverCapability::KeyValue)
+                    && !self.driver_supports(index, DriverCapability::Documents)
+                {
+                    items = items.child(self.context_item(
+                        "ctx-new-notebook",
+                        t!("notebook.new").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.open_new_notebook_for_connection(index, cx);
+                        }),
+                    ));
+                }
 
                 items = items.child(div().h(px(1.0)).my_1().bg(rgb(theme.border)));
                 items =
@@ -477,6 +490,16 @@ impl AppView {
                             this.open_new_query_for_database(ci, di, cx);
                         }),
                     ));
+                if !key_value && !documents {
+                    items = items.child(self.context_item(
+                        "db-new-notebook",
+                        t!("notebook.new").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.open_new_notebook_for_database(ci, di, cx);
+                        }),
+                    ));
+                }
                 if key_value {
                     items = items
                         .child(self.context_item(

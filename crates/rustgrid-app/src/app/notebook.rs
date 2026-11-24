@@ -310,6 +310,52 @@ impl AppView {
         }
     }
 
+    /// Open a new, unsaved notebook bound to a connection (and database/schema), with one empty
+    /// SQL cell, and show it.
+    pub(super) fn open_new_notebook(
+        &mut self,
+        connection_index: Option<usize>,
+        database: Option<String>,
+        schema: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let id = self.next_notebook_id;
+        self.next_notebook_id += 1;
+        let notebook = rustgrid_notebook::Notebook {
+            cells: vec![rustgrid_notebook::Cell::new_sql("")],
+            ..Default::default()
+        };
+        let mut tab =
+            crate::session::NotebookTab::from_notebook(id, notebook, None, connection_index);
+        tab.database = database;
+        tab.schema = schema;
+        self.notebooks.push(tab);
+        self.activate_notebook(self.notebooks.len() - 1, cx);
+        self.clear_object_search_unless_kept(cx);
+    }
+
+    /// "New notebook" on a connection row: bound to the connection's current database.
+    pub(super) fn open_new_notebook_for_connection(
+        &mut self,
+        connection_index: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let database = self.default_query_database(connection_index, cx);
+        let schema = self.default_query_schema(cx, connection_index, database.as_deref());
+        self.open_new_notebook(Some(connection_index), database, schema, cx);
+    }
+
+    /// "New notebook" on a database row: bound to that database (no schema).
+    pub(super) fn open_new_notebook_for_database(
+        &mut self,
+        connection_index: usize,
+        database_index: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let database = self.database_name(connection_index, database_index);
+        self.open_new_notebook(Some(connection_index), database, None, cx);
+    }
+
     /// Show the notebook at `index` in the content pane.
     pub(super) fn activate_notebook(&mut self, index: usize, cx: &mut Context<'_, Self>) {
         if index >= self.notebooks.len() {

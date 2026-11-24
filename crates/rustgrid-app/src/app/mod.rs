@@ -2478,6 +2478,7 @@ pub struct AppView {
     /// The notebook tab shown now, indexed into `notebooks`. Cleared wherever `active_design` is,
     /// and checked right after it, so a notebook tab behaves like a designer tab.
     active_notebook: Option<usize>,
+    next_notebook_id: u64,
     /// The pinned database session of each notebook, by notebook id. Kept apart from the tab
     /// because a session is not `Clone` and is not tab state.
     notebook_sessions: std::collections::HashMap<u64, runsql::ScriptSessionGuard>,
@@ -3457,6 +3458,7 @@ impl AppView {
             next_query_id: 0,
             notebooks: Vec::new(),
             active_notebook: None,
+            next_notebook_id: 0,
             notebook_sessions: std::collections::HashMap::new(),
             query_files,
             saved_query_selected: None,
