@@ -377,10 +377,16 @@ impl AppView {
         let Some(tab) = self.notebooks.get_mut(index) else {
             return true;
         };
-        if cell + 1 >= tab.cells.len() {
-            tab.insert_cell(cell + 1, rustgrid_notebook::Cell::new_sql(""));
-        }
-        self.focus_notebook_cell(index, cell + 1, window, cx);
+        // The next cell a folded section does not hide; past the last one, a new SQL cell.
+        let next = match tab.next_visible(cell) {
+            Some(next) => next,
+            None => {
+                let at = tab.cells.len();
+                tab.insert_cell(at, rustgrid_notebook::Cell::new_sql(""));
+                at
+            }
+        };
+        self.focus_notebook_cell(index, next, window, cx);
         true
     }
 
@@ -395,10 +401,12 @@ impl AppView {
         if !self.run_or_render_notebook_cell(index, cell, cx) {
             return false;
         }
-        if let Some(tab) = self.notebooks.get_mut(index) {
-            tab.insert_cell(cell + 1, rustgrid_notebook::Cell::new_sql(""));
-        }
-        self.focus_notebook_cell(index, cell + 1, window, cx);
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return true;
+        };
+        let at = tab.insert_point_after(cell);
+        tab.insert_cell(at, rustgrid_notebook::Cell::new_sql(""));
+        self.focus_notebook_cell(index, at, window, cx);
         true
     }
 
@@ -1056,10 +1064,24 @@ impl AppView {
         let at = if tab.cells.is_empty() {
             0
         } else {
-            tab.selected + 1
+            tab.insert_point_after(tab.selected)
         };
         tab.insert_cell(at, cell);
         cx.notify();
+    }
+
+    /// Fold or unfold the section headed by the Markdown heading at `cell`.
+    pub(super) fn toggle_notebook_section(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(tab) = self.notebooks.get_mut(index)
+            && tab.toggle_section(cell)
+        {
+            cx.notify();
+        }
     }
 
     /// Select the cell at `cell` of the notebook at `index`.

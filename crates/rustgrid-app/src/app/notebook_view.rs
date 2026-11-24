@@ -30,6 +30,11 @@ struct CellView {
     running: bool,
     /// Markdown: shown as its editor rather than rendered.
     editing: bool,
+    /// A Markdown heading cell, which heads a foldable section.
+    heading: bool,
+    /// Its section is folded; `folded_cells` is how many cells that hides.
+    collapsed: bool,
+    folded_cells: usize,
     is_last: bool,
     /// Per output: its result grid when the last run produced one, otherwise a summary line.
     outputs: Vec<(Option<u64>, String, u32)>,
@@ -61,10 +66,13 @@ impl AppView {
             .connection_index
             .is_some_and(|connection| self.driver_supports(connection, DriverCapability::Schemas));
         let cell_count = tab.cells.len();
+        // Cells inside a folded section are not drawn at all.
+        let hidden = tab.hidden_cells();
         let cells: Vec<CellView> = tab
             .cells
             .iter()
             .enumerate()
+            .filter(|(cell_index, _)| !hidden[*cell_index])
             .map(|(cell_index, state)| CellView {
                 index: cell_index,
                 id: state.cell.id.clone(),
@@ -74,6 +82,13 @@ impl AppView {
                 elapsed: state.elapsed,
                 running: tab.running == Some(cell_index),
                 editing: state.editing,
+                heading: state.cell.heading_level().is_some(),
+                collapsed: state.cell.is_collapsed(),
+                folded_cells: if state.cell.is_collapsed() {
+                    tab.section_end(cell_index) - cell_index - 1
+                } else {
+                    0
+                },
                 is_last: cell_index + 1 == cell_count,
                 outputs: state
                     .cell
@@ -476,6 +491,54 @@ impl AppView {
                 })),
             );
 
+        // A heading's fold chevron leads its header, like Colab's.
+        let fold: AnyElement = if cell.heading {
+            let (icon, tip) = if cell.collapsed {
+                ("icons/chevron-right.svg", t!("notebook.section.expand"))
+            } else {
+                ("icons/chevron-down.svg", t!("notebook.section.collapse"))
+            };
+            ui::icon_button(
+                SharedString::from(format!("notebook-{tab_id}-fold-{}", cell.id)),
+                icon,
+                theme.text,
+                18.0,
+                18.0,
+                false,
+                theme,
+                |_, _, _| {},
+            )
+            .tooltip(ui::text_tooltip(tip.to_string()))
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.toggle_notebook_section(index, cell_index, cx)
+            }))
+            .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+        let folded_note = (cell.collapsed && cell.folded_cells > 0).then(|| {
+            div()
+                .id(SharedString::from(format!(
+                    "notebook-{tab_id}-folded-{}",
+                    cell.id
+                )))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded(px(4.0))
+                .bg(rgb(theme.toolbar_bg))
+                .text_size(px(11.0))
+                .text_color(rgb(theme.text_muted))
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(theme.text)))
+                .child(t!("notebook.section.hidden", count = cell.folded_cells).to_string())
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.toggle_notebook_section(index, cell_index, cx)
+                }))
+        });
         let mut card = div()
             .id(SharedString::from(format!(
                 "notebook-{tab_id}-cell-{}",
@@ -507,13 +570,15 @@ impl AppView {
                     .gap_2()
                     .text_size(px(11.0))
                     .text_color(rgb(theme.text_muted))
+                    .child(fold)
                     .child(div().font_family(editor_font.clone()).child(count))
                     .child(kind)
                     .child(div().flex_1())
                     .child(status)
                     .child(actions),
             )
-            .child(body);
+            .child(body)
+            .children(folded_note);
         for (grid_id, text, color) in cell.outputs {
             let grid = grid_id.and_then(|id| {
                 self.grids

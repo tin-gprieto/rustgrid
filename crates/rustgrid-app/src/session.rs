@@ -942,6 +942,8 @@ impl NotebookTab {
         }
         self.selected = index;
         self.dirty = true;
+        // A cell added inside a folded section must not be typed into while invisible.
+        self.reveal_cell(index);
     }
 
     /// Remove the cell at `index`. Returns the ids of the removed cell's result grids, which the
@@ -1030,6 +1032,7 @@ impl NotebookTab {
         }
         self.selected = to;
         self.dirty = true;
+        self.reveal_cell(to);
     }
 
     /// Turn the cell at `index` into an SQL or Markdown cell. Its outputs and execution count go
@@ -1054,6 +1057,9 @@ impl NotebookTab {
         state.error = None;
         state.elapsed = None;
         state.editing = kind == CellKind::Markdown;
+        // A folded heading turned into SQL no longer heads a section; do not let it come back
+        // folded if it is turned into Markdown again.
+        state.cell.set_collapsed(false);
         self.dirty = true;
         std::mem::take(&mut state.result_grids)
             .into_iter()
@@ -1083,7 +1089,63 @@ impl NotebookTab {
             previous.editing = false;
         }
         self.selected = index;
+        self.reveal_cell(index);
         true
+    }
+
+    /// Which cells a folded section hides (one flag per cell).
+    pub fn hidden_cells(&self) -> Vec<bool> {
+        rustgrid_notebook::hidden_cells(self.cells.iter().map(|state| &state.cell))
+    }
+
+    /// The index just past the section headed by the cell at `index`.
+    pub fn section_end(&self, index: usize) -> usize {
+        rustgrid_notebook::section_end(self.cells.iter().map(|state| &state.cell), index)
+    }
+
+    /// Fold or unfold the section headed by the Markdown heading at `index`. A selection the fold
+    /// hides moves onto the heading. Returns whether anything changed (a non-heading cannot fold).
+    pub fn toggle_section(&mut self, index: usize) -> bool {
+        let end = self.section_end(index);
+        let Some(state) = self.cells.get_mut(index) else {
+            return false;
+        };
+        if state.cell.heading_level().is_none() {
+            return false;
+        }
+        let collapse = !state.cell.is_collapsed();
+        state.cell.set_collapsed(collapse);
+        if collapse && (index + 1..end).contains(&self.selected) {
+            self.selected = index;
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// Where a cell added "below" the cell at `index` goes: after a folded section's last cell
+    /// (as Colab does), so adding never unfolds it; otherwise right under the cell.
+    pub fn insert_point_after(&self, index: usize) -> usize {
+        match self.cells.get(index) {
+            Some(state) if state.cell.is_collapsed() => self.section_end(index),
+            Some(_) => index + 1,
+            None => self.cells.len(),
+        }
+    }
+
+    /// The first cell after `index` that no folded section hides.
+    pub fn next_visible(&self, index: usize) -> Option<usize> {
+        let hidden = self.hidden_cells();
+        (index + 1..self.cells.len()).find(|&next| !hidden[next])
+    }
+
+    /// Unfold every section that hides the cell at `index`, so it can be seen and edited.
+    pub fn reveal_cell(&mut self, index: usize) {
+        for heading in 0..index.min(self.cells.len()) {
+            if self.cells[heading].cell.is_collapsed() && self.section_end(heading) > index {
+                self.cells[heading].cell.set_collapsed(false);
+                self.dirty = true;
+            }
+        }
     }
 
     /// Mark the cell `cell_id` as running and return the run's generation and cancel flag. The
@@ -2430,6 +2492,31 @@ mod tests {
             assert!(!tab.cells[1].editing);
             assert!(!tab.select_cell(2));
             assert!(!tab.select_cell(9));
+        }
+
+        #[test]
+        fn folding_a_section_hides_its_cells_and_selecting_one_reveals_it() {
+            let mut tab = sql_tab();
+            tab.insert_cell(0, rustgrid_notebook::Cell::new_markdown("## Data"));
+            tab.insert_cell(3, rustgrid_notebook::Cell::new_markdown("## Next"));
+            // [## Data, sql, sql, ## Next]
+            tab.selected = 2;
+            assert!(tab.toggle_section(0));
+            assert_eq!(tab.hidden_cells(), vec![false, true, true, false]);
+            assert_eq!(tab.selected, 0, "the hidden selection moves to the heading");
+            assert!(!tab.toggle_section(1), "an SQL cell heads no section");
+
+            tab.select_cell(2);
+            assert_eq!(tab.hidden_cells(), vec![false; 4]);
+            assert!(!tab.cells[0].cell.is_collapsed());
+
+            // Adding below a folded heading goes after its section and keeps it folded.
+            assert!(tab.toggle_section(0));
+            assert_eq!(tab.insert_point_after(0), 3);
+            assert_eq!(tab.next_visible(0), Some(3));
+            // A cell inserted inside a folded section unfolds it.
+            tab.insert_cell(1, rustgrid_notebook::Cell::new_sql(""));
+            assert!(!tab.cells[0].cell.is_collapsed());
         }
 
         #[test]

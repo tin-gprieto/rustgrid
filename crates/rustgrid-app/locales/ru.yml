@@ -1880,3 +1880,6 @@ options.notebook.save_outputs: "Сохранять результаты в фа�
 options.notebook.save_outputs_hint: "Выключено: сохранённый .ipynb содержит только ячейки, как после «Clear All Outputs» в Jupyter. Открытый блокнот сохраняет свои результаты."
 options.notebook.max_rows: "Строк на результат"
 options.notebook.max_rows_hint: "Сколько строк каждого результата ячейка хранит как вывод и записывает в файл. 0 — без ограничения."
+notebook.section.collapse: "Свернуть раздел"
+notebook.section.expand: "Развернуть раздел"
+notebook.section.hidden: "Скрыто ячеек: %{count}"
