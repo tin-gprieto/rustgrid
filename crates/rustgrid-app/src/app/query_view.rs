@@ -1546,7 +1546,7 @@ const QUERY_TAG: &str = "SQL";
 /// The row icon of a Queries list entry: a notebook's, or the saved query's.
 fn query_file_icon(file: &QueryFileInfo) -> &'static str {
     if file.notebook {
-        "icons/notebook-text.svg"
+        super::tabs::NOTEBOOK_ICON
     } else {
         "icons/queries.svg"
     }

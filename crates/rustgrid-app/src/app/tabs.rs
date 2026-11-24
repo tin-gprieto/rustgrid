@@ -11,7 +11,7 @@ type DesignTabRow = (usize, u64, String, bool, Option<ConnectionColor>);
 type NotebookTabRow = (usize, u64, String, Option<ConnectionColor>);
 
 /// The notebook tab's icon (Lucide, served by gpui-kit's asset fallback).
-const NOTEBOOK_ICON: &str = "icons/notebook-text.svg";
+pub(super) const NOTEBOOK_ICON: &str = "icons/notebook.svg";
 
 /// A query/editor tab row: `(index, id, title, icon, icon colour, environment colour)`.
 type QueryTabRow = (

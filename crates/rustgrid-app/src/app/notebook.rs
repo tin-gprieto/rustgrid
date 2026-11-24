@@ -991,6 +991,19 @@ impl AppView {
         self.clear_object_search_unless_kept(cx);
     }
 
+    /// The toolbar's New Notebook: bound to the connection and database a New Query would use.
+    /// A key-value or document store runs no SQL cells, so its notebook starts unbound.
+    pub(super) fn open_new_notebook_from_toolbar(&mut self, cx: &mut Context<'_, Self>) {
+        let connection_index = self.default_query_connection(cx).filter(|&index| {
+            !self.driver_supports(index, DriverCapability::KeyValue)
+                && !self.driver_supports(index, DriverCapability::Documents)
+        });
+        let database = connection_index.and_then(|index| self.default_query_database(index, cx));
+        let schema = connection_index
+            .and_then(|index| self.default_query_schema(cx, index, database.as_deref()));
+        self.open_new_notebook(connection_index, database, schema, cx);
+    }
+
     /// "New notebook" on a connection row: bound to the connection's current database.
     pub(super) fn open_new_notebook_for_connection(
         &mut self,

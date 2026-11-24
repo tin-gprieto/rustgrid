@@ -242,6 +242,17 @@ impl AppView {
                 },
                 cx.listener(|this, _event, _window, cx| this.open_new_query(cx)),
             ))
+            .child(self.main_button(
+                "main-notebook",
+                super::tabs::NOTEBOOK_ICON,
+                t!("notebook.new").to_string(),
+                MainButtonState {
+                    active: false,
+                    enabled: true,
+                    caret: false,
+                },
+                cx.listener(|this, _event, _window, cx| this.open_new_notebook_from_toolbar(cx)),
+            ))
             .child(main_separator(theme));
 
         // A document store (MongoDB) has collections and a query console, not views/routines/
