@@ -215,12 +215,24 @@ not a later refactor.
   the UI recommends a read-only account. Database scope and the sensitive-table blacklist are
   checked for every metadata tool and for parsed queries; they are advanced `mcp.json` fields (the
   Options page only edits the read-only/full-access switch). See `docs/mcp.md`.
+- `crates/rustgrid-notebook` — the engine-agnostic **SQL notebook** model and its Jupyter `.ipynb`
+  mapping (no GPUI, no drivers). `read_ipynb` / `write_ipynb` speak nbformat 4.5 in **JupySQL**'s
+  shape: an SQL cell is a code cell starting with `%%sql` (the line's arguments kept verbatim in
+  `magic_args`, never interpreted), any other code cell is a `Raw` cell kept as it is, a
+  `%load_ext sql` cell is added when none loads the extension, results are `execute_result`
+  `text/html` + `text/plain` tables (`results_to_outputs`, capped by a row count), and everything
+  unmodelled (metadata, unknown outputs, top-level keys) round-trips. `metadata.rustgrid` holds only
+  the connection's **profile id**, database and schema (a test asserts no host/user/password reaches
+  the file). `sections.rs` computes Colab/JupyterLab-style collapsible sections from Markdown
+  heading levels, stored under JupyterLab's `jp-MarkdownHeadingCollapsed` cell metadata. See
+  `docs/notebooks.md`.
 - `crates/rustgrid-app` — GPUI binary `RustGrid`: `src/app/` is the view/render layer, split
   by feature (`mod.rs` holds `AppView`, its state, the `Render` entry, free helpers and
   tests; the rest are `impl AppView` submodules: `tree`, `database`, `db_dialog`, `objects`,
   `sidebar`, `tabs`, `toolbar`, `query`, `query_view`, `query_editor`, `grid`, `grid_input`,
   `grid_commit`, `grid_view`, `grid_cell`, `grid_scroll`, `grid_toolbar`, `dialogs`,
-  `export`, `import`, `routine`, `routine_view`, `view`, `view_view`, `widgets`, `form`). New view code goes in the matching submodule, **not** `mod.rs`.
+  `export`, `import`, `routine`, `routine_view`, `view`, `view_view`, `notebook`, `notebook_view`,
+  `widgets`, `form`). New view code goes in the matching submodule, **not** `mod.rs`.
   `ui/` is the internal design system (buttons, scrollbars, text fields, dropdowns, ...) and the
   wrapper layer over gpui-kit: put shared chrome there, never one-off `div`s in feature code. Several subtrees are child
   `Entity` views wired through `WeakEntity<AppView>` + `notify_*` invalidation: the Tables/Views
@@ -1186,6 +1198,26 @@ shadcn chrome described above. Implemented today:
     SELECT/EXPLAIN SELECT with `sqlparser` in the driver's own dialect and rejects writes, locking
     reads, `SELECT … INTO`, executable comments, dangerous/external functions and out-of-scope
     relations; it is a guardrail, with the database account as the real boundary. See `docs/mcp.md`.
+
+23. SQL notebooks (`crates/rustgrid-notebook` + `app/notebook.rs` / `app/notebook_view.rs`,
+    `session.rs::NotebookTab`): a notebook tab (`TabKey::Notebook`, `active_notebook`, shown after
+    queries and designers in `current_tab`) holds SQL, Markdown and read-only Raw cells. Each open
+    notebook pins **one** `ScriptSession` (`AppView::notebook_sessions`, released on the runtime
+    through `ScriptSessionGuard`), so session state carries between cells on the engines that
+    implement `script_session` (MySQL/MariaDB, PostgreSQL, SQLite, ClickHouse); a run is matched to
+    its cell **by id** and discarded when `run_generation` moved on (Stop/Restart). Result grids are
+    ordinary read-only `GridView`s (`push_query_result_grid`, `scroll_chain` so the wheel reaches the
+    notebook) whose ids the cell owns; deleting/retyping a cell hands them back through
+    `#[must_use]` returns and `remove_grids_by_id`. Cell editors are `ui::SqlEditor`s keyed by
+    `(notebook id, cell id)` with the query editor's completion (`sql_completion`). The toolbar reuses
+    the query tab's connection/database/schema pickers (`picker_binding`, `rebind_notebook`).
+    Jupyter's keys are `keymap` commands in the `Notebook` group, bound at `Notebook > Input` so they
+    outrank the kit input's own Enter/Escape. Files: New Notebook (toolbar, connection/database menus),
+    Open Notebook…, drag-and-drop and command-line paths (`file_drop.rs::open_path`), Save / Save As
+    (default `ConfigStore::notebook_dir`, listed in the Queries view as `QueryFileInfo { notebook }`),
+    the unsaved-close prompt (`PendingAction::CloseNotebook`), session restore (`SessionNotebook`,
+    with the unsaved `.ipynb` text as hot exit) and Options → General → Notebooks (save outputs, rows
+    kept per result). Redis/MongoDB connections offer no notebook. See `docs/notebooks.md`.
 
 Still out of scope: engines other than MySQL, MariaDB, SQLite, SQL Server, PostgreSQL, Oracle,
 ClickHouse and Redis, and the disabled placeholder UI

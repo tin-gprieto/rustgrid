@@ -85,6 +85,9 @@ Click a screenshot to view it full size.
   partitioning and comments, with a live SQL preview.
 - **SQL editor** — syntax highlighting and smart completion, Beautify SQL, Explain, multi-statement
   runs on one session (a result tab per result set), and saved named queries.
+- **SQL notebooks** — SQL and Markdown cells in one tab with results under each cell, one session
+  across cells, Jupyter's keys, collapsible heading sections, and `.ipynb` files that JupySQL runs
+  too; see `docs/notebooks.md`.
 - **Scripts & results** — Run SQL File and Dump SQL File from a database's menu; Export Results
   writes one result set, or several as worksheets in one `.xlsx` workbook.
 - **Users & privileges** — account editors and privilege managers for the engines that have
@@ -155,6 +158,8 @@ cargo run -p rustgrid-app
 - `crates/rustgrid-backup` — the `.rgbak` backup container.
 - `crates/rustgrid-export` — table-data exporters (`.xlsx` / `.csv` / `.sql` / `.txt`).
 - `crates/rustgrid-import` — Excel / CSV / TXT source readers.
+- `crates/rustgrid-notebook` — SQL notebook model and its Jupyter / JupySQL `.ipynb` format; see
+  `docs/notebooks.md`.
 - `crates/rustgrid-config` — versioned settings/profiles and encrypted secret storage.
 - `crates/rustgrid-app` — the GPUI desktop application (binary `RustGrid`).
 

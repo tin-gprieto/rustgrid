@@ -81,6 +81,9 @@ MongoDB 数据库管理工具。它的界面布局和交互习惯对齐 Navicat�
   检查约束、排除约束、规则、触发器、分区和注释，并提供实时 SQL 预览。
 - **SQL 编辑器** —— 语法高亮与智能补全、美化 SQL、解释、在同一会话中执行多条语句（每个结果集
   一个结果页），以及保存命名查询。
+- **SQL 笔记本** —— 在同一个标签页中混合 SQL 与 Markdown 单元格，结果显示在各单元格下方；
+  单元格之间共享同一会话，支持 Jupyter 快捷键和按标题折叠章节，保存为 JupySQL 也能运行的
+  `.ipynb` 文件，详见 `docs/notebooks.md`。
 - **脚本与结果** —— 数据库菜单提供运行 SQL 文件和转储 SQL 文件；导出结果可写出单个结果集，
   或将多个结果集写入同一个 `.xlsx` 工作簿的不同工作表。
 - **用户与权限** —— 为有账户体系的引擎提供账户编辑器和权限管理器：服务器 / 数据库范围、角色，
@@ -142,6 +145,8 @@ cargo run -p rustgrid-app
 - `crates/rustgrid-backup` —— `.rgbak` 备份容器。
 - `crates/rustgrid-export` —— 表数据导出器（`.xlsx` / `.csv` / `.sql` / `.txt`）。
 - `crates/rustgrid-import` —— Excel / CSV / TXT 源文件读取。
+- `crates/rustgrid-notebook` —— SQL 笔记本模型及其 Jupyter / JupySQL `.ipynb` 格式，详见
+  `docs/notebooks.md`。
 - `crates/rustgrid-config` —— 带版本号的设置 / 连接配置，以及加密的密钥存储。
 - `crates/rustgrid-app` —— GPUI 桌面应用（二进制 `RustGrid`）。
 

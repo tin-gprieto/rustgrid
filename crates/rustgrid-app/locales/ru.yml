@@ -128,6 +128,8 @@ keymap.query.select_all_occurrences: "Выделить все вхождения
 keymap.designer.save: "Сохранить структуру таблицы"
 keymap.backups.rename: "Бекапы: переименовать"
 keymap.backups.copy: "Бекапы: копировать"
+keymap.designer.select_all: "Конструктор таблиц: выделить все поля"
+keymap.designer.copy: "Конструктор таблиц: копировать выделенные ячейки"
 keymap.designer.paste: "Конструктор таблиц: вставить скопированные поля"
 keymap.designer.find: "Конструктор таблиц: найти поле"
 keymap.designer.insert_row: "Конструктор таблиц: вставить строку"
