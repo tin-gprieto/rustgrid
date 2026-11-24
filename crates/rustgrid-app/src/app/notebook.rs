@@ -657,6 +657,47 @@ impl AppView {
         self.close_notebook(id, cx);
     }
 
+    /// Export the result sets of the cell at `cell` through the Export Wizard (each grid is
+    /// "Result N", numbered within the cell like its output area).
+    pub(super) fn export_notebook_cell(
+        &mut self,
+        index: usize,
+        cell: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.export_wizard.is_some() || self.export_choice.is_some() {
+            return;
+        }
+        let Some(tab) = self.notebooks.get(index) else {
+            return;
+        };
+        let Some(state) = tab.cells.get(cell) else {
+            return;
+        };
+        let connection_index = tab.connection_index;
+        let database = tab.database.clone().unwrap_or_default();
+        let dialect = connection_index
+            .map(|connection| self.driver_dialect(connection))
+            .unwrap_or_default();
+        let mut results = Vec::new();
+        for grid_id in state.result_grids.iter().flatten() {
+            let Some(grid) = self
+                .grids
+                .iter()
+                .find(|grid| grid.read(cx).state.id == *grid_id)
+            else {
+                continue;
+            };
+            let grid = grid.read(cx);
+            results.push(ExportSnapshot {
+                name: t!("query.result_tab", n = results.len() + 1).to_string(),
+                columns: grid.state.all_columns.clone(),
+                rows: grid.state.rows.clone(),
+            });
+        }
+        self.offer_result_export(connection_index, database, dialect, results, 0, cx);
+    }
+
     /// Close every notebook tab (Close Other / Close All Tabs).
     pub(super) fn close_all_notebooks(&mut self, cx: &mut Context<'_, Self>) {
         while let Some(id) = self.notebooks.last().map(|tab| tab.id) {

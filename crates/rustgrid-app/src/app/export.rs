@@ -240,6 +240,20 @@ impl AppView {
                 });
             }
         }
+        self.offer_result_export(connection_index, database, dialect, results, active, cx);
+    }
+
+    /// Export result-set snapshots: a single one goes straight to the Export Wizard, several open
+    /// the multi-select choice with `active` ticked. Shared by query tabs and notebook cells.
+    pub(super) fn offer_result_export(
+        &mut self,
+        connection_index: Option<usize>,
+        database: String,
+        dialect: DriverDialect,
+        results: Vec<ExportSnapshot>,
+        active: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
         if results.is_empty() {
             return;
         }

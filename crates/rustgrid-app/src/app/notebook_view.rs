@@ -391,6 +391,19 @@ impl AppView {
                 ),
             );
         }
+        if cell.outputs.iter().any(|(grid, _, _)| grid.is_some()) {
+            actions = actions.child(
+                action(
+                    "export",
+                    "icons/export.svg",
+                    t!("query.export_results").to_string(),
+                    !cell.running,
+                )
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.export_notebook_cell(index, cell_index, cx)
+                })),
+            );
+        }
         actions = actions
             .child(
                 action(
