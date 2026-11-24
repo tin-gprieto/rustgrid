@@ -8,6 +8,7 @@
 //! Restart made stale drops it, and [`ScriptSessionGuard`] releases it on the Tokio runtime.
 
 use super::query::{StatementOutcome, run_statements, split_for_run};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use super::runsql::ScriptSessionGuard;
@@ -592,6 +593,37 @@ impl AppView {
 
     /// Restart the notebook's session ("Restart kernel"): stop any running cell and drop the pinned
     /// session, so the next run starts on a fresh connection with no session state.
+    /// Point the notebook at `index` to another connection/database/schema (the toolbar pickers,
+    /// or the choice after opening a file whose connection is unknown). A changed binding drops
+    /// the pinned session, so the next run starts on the new target. A no-op choice changes
+    /// nothing, so re-picking the same database does not mark the notebook unsaved.
+    pub(super) fn rebind_notebook(
+        &mut self,
+        index: usize,
+        connection_index: Option<usize>,
+        database: Option<String>,
+        schema: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        if tab.connection_index == connection_index
+            && tab.database == database
+            && tab.schema == schema
+        {
+            return;
+        }
+        // A schema filled in by the picker's default is not a new target.
+        let target_changed = tab.connection_index != connection_index || tab.database != database;
+        tab.set_binding(connection_index, database, schema);
+        let tab_id = tab.id;
+        if target_changed {
+            self.restart_notebook_session(tab_id, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn restart_notebook_session(&mut self, tab_id: u64, cx: &mut Context<'_, Self>) {
         let Some(position) = self.notebook_position(tab_id) else {
             return;
@@ -655,6 +687,104 @@ impl AppView {
         }
         let id = tab.id;
         self.close_notebook(id, cx);
+    }
+
+    /// "Open Notebook…": pick a `.ipynb` (starting in the notebooks folder) and open it.
+    pub(super) fn open_notebook_dialog(&mut self, cx: &mut Context<'_, Self>) {
+        let title = t!("notebook.open").to_string();
+        let default_dir = self.config.notebooks_dir();
+        cx.spawn(async move |this, cx| {
+            let mut dialog = super::file_dialog::open_dialog(title, "Jupyter Notebook", &["ipynb"]);
+            if default_dir.is_dir() {
+                dialog = dialog.set_directory(&default_dir);
+            }
+            let Some(handle) = dialog.pick_file().await else {
+                return;
+            };
+            let path = handle.path().to_path_buf();
+            let _ = this.update(cx, |app, cx| app.open_notebook_path(path, cx));
+        })
+        .detach();
+    }
+
+    /// Open the `.ipynb` at `path` in a notebook tab, or bring forward the tab that already has it.
+    /// A file saved by RustGrid names its connection (`metadata.rustgrid.connection_id`): when
+    /// that connection exists the notebook is bound to it and it is connected; otherwise the
+    /// notebook opens unbound and the toolbar's pickers choose one.
+    pub(super) fn open_notebook_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if let Some(index) = self.notebooks.iter().position(|tab| {
+            tab.path.as_ref().is_some_and(|open| {
+                std::fs::canonicalize(open).unwrap_or_else(|_| open.clone()) == canonical
+            })
+        }) {
+            self.activate_notebook(index, cx);
+            return;
+        }
+        let runtime = self.runtime.clone();
+        cx.spawn(async move |this, cx| {
+            let read_path = canonical.clone();
+            let loaded = runtime
+                .spawn_blocking(move || {
+                    let text = std::fs::read_to_string(&read_path).map_err(|e| e.to_string())?;
+                    rustgrid_notebook::read_ipynb(&text).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|result| result);
+            let _ = this.update(cx, |app, cx| match loaded {
+                Ok(notebook) => app.install_opened_notebook(canonical, notebook, cx),
+                Err(error) => app.toast(
+                    ToastKind::Error,
+                    t!("notebook.open_failed", error = error).to_string(),
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
+    /// Add a notebook read from `path` as a tab, bound to its saved connection when it exists.
+    fn install_opened_notebook(
+        &mut self,
+        path: PathBuf,
+        notebook: rustgrid_notebook::Notebook,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let saved_id = notebook
+            .binding
+            .as_ref()
+            .map(|binding| binding.connection_id.clone());
+        let connection_index = saved_id.as_deref().and_then(|id| {
+            self.connections
+                .iter()
+                .position(|node| node.profile.id == id)
+        });
+        let id = self.next_notebook_id;
+        self.next_notebook_id += 1;
+        let tab =
+            crate::session::NotebookTab::from_notebook(id, notebook, Some(path), connection_index);
+        self.notebooks.push(tab);
+        self.activate_notebook(self.notebooks.len() - 1, cx);
+        match connection_index {
+            Some(index) => {
+                if !matches!(
+                    self.connections.get(index).map(|node| &node.status),
+                    Some(ConnectionStatus::Connected(_))
+                ) {
+                    self.connect(index, cx);
+                }
+            }
+            None => {
+                let key = if saved_id.is_some() {
+                    "notebook.connection_missing"
+                } else {
+                    "notebook.choose_connection"
+                };
+                self.toast(ToastKind::Info, t!(key).to_string(), cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Write the notebook at `index` as `.ipynb`: to its file, or — for a new notebook and for

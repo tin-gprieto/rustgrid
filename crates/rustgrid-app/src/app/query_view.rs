@@ -1049,21 +1049,21 @@ impl AppView {
             .child(label)
     }
 
-    fn query_connection_combo_element(&self) -> AnyElement {
+    pub(super) fn query_connection_combo_element(&self) -> AnyElement {
         match self.query_connection_combo.as_ref() {
             Some(combo) => combo.clone().into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    fn query_database_combo_element(&self) -> AnyElement {
+    pub(super) fn query_database_combo_element(&self) -> AnyElement {
         match self.query_database_combo.as_ref() {
             Some(combo) => combo.clone().into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    fn query_schema_combo_element(&self) -> AnyElement {
+    pub(super) fn query_schema_combo_element(&self) -> AnyElement {
         match self.query_schema_combo.as_ref() {
             Some(combo) => combo.clone().into_any_element(),
             None => div().into_any_element(),

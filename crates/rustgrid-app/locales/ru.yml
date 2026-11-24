@@ -1871,3 +1871,7 @@ keymap.notebook.leave_edit: "Выйти из редактирования Markdo
 notebook.save_as: "Сохранить как"
 notebook.saved: "Сохранено: %{path}"
 notebook.save_failed: "Не удалось сохранить блокнот: %{error}"
+notebook.open: "Открыть блокнот…"
+notebook.open_failed: "Не удалось открыть блокнот: %{error}"
+notebook.connection_missing: "Подключение этого блокнота больше не существует. Выберите подключение на панели инструментов, чтобы выполнить его."
+notebook.choose_connection: "Выберите подключение на панели инструментов, чтобы выполнить этот блокнот."

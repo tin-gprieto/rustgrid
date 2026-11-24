@@ -57,6 +57,9 @@ impl AppView {
             .get(selected)
             .is_some_and(|state| state.cell.kind == CellKind::Sql);
         let has_session = self.notebook_sessions.contains_key(&tab_id);
+        let supports_schemas = tab
+            .connection_index
+            .is_some_and(|connection| self.driver_supports(connection, DriverCapability::Schemas));
         let cell_count = tab.cells.len();
         let cells: Vec<CellView> = tab
             .cells
@@ -98,6 +101,13 @@ impl AppView {
             .bg(rgb(theme.toolbar_bg))
             .border_b_1()
             .border_color(rgb(theme.border))
+            // The query tab's own pickers: they follow whichever of the two is shown.
+            .child(self.query_connection_combo_element())
+            .child(self.query_database_combo_element())
+            .when(supports_schemas, |toolbar| {
+                toolbar.child(self.query_schema_combo_element())
+            })
+            .child(div().w(px(10.0)).flex_none())
             .child(self.query_tool_button(
                 "notebook-run-cell",
                 "icons/run.svg",

@@ -118,12 +118,13 @@ fn main() {
                 win_resize::install(window);
                 let view = cx
                     .new(|cx| AppView::new(registry.clone(), config.clone(), runtime.clone(), cx));
-                // A database file the app was launched with (dragged onto the executable, or
-                // opened through the shell's "Open with") becomes a connection like a dropped one.
+                // A file the app was launched with (dragged onto the executable, or opened through
+                // the shell's "Open with") opens like a dropped one: a database becomes a
+                // connection, a `.ipynb` a notebook tab.
                 if !startup_paths.is_empty() {
                     view.update(cx, |app, cx| {
                         for path in startup_paths {
-                            app.open_sqlite_path(path, cx);
+                            app.open_path(path, cx);
                         }
                     });
                 }

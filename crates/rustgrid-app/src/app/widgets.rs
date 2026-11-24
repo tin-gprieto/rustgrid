@@ -216,6 +216,14 @@ impl AppView {
                             this.open_new_notebook_for_connection(index, cx);
                         }),
                     ));
+                    items = items.child(self.context_item(
+                        "ctx-open-notebook",
+                        t!("notebook.open").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.open_notebook_dialog(cx);
+                        }),
+                    ));
                 }
 
                 items = items.child(div().h(px(1.0)).my_1().bg(rgb(theme.border)));
@@ -377,6 +385,14 @@ impl AppView {
                             this.add_group(window, cx);
                         }),
                     ))
+                    .child(self.context_item(
+                        "tree-open-notebook",
+                        t!("notebook.open").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.open_notebook_dialog(cx);
+                        }),
+                    ))
                     .child(div().h(px(1.0)).my_1().bg(rgb(theme.border)))
                     .child(self.import_connections_submenu_item(cx))
                     .child(self.context_item(
@@ -497,6 +513,14 @@ impl AppView {
                         cx.listener(move |this, _event, _window, cx| {
                             this.context_menu = None;
                             this.open_new_notebook_for_database(ci, di, cx);
+                        }),
+                    ));
+                    items = items.child(self.context_item(
+                        "db-open-notebook",
+                        t!("notebook.open").to_string(),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.context_menu = None;
+                            this.open_notebook_dialog(cx);
                         }),
                     ));
                 }

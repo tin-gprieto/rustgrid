@@ -2,11 +2,12 @@
 //!
 //! The drop frame itself is deliberately generic: it says only that the file will be opened, so a
 //! future format plugs into [`classify_dropped_file`] instead of needing its own overlay. SQLite is
-//! the format implemented today: a dropped database file becomes an ordinary connection named after
+//! one format: a dropped database file becomes an ordinary connection named after
 //! the file, added to the tree and opened. A file that already has a connection is not added twice:
 //! its connection is selected and opened again. While a file is dragged over the window, a scrim
 //! shows where it will land; the overlay is one element with a short opacity animation, so the
-//! indicator costs nothing per mouse move.
+//! indicator costs nothing per mouse move. A Jupyter notebook (`.ipynb`) is the other: it opens
+//! in a notebook tab (`notebook.rs::open_notebook_path`).
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,14 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 /// formats: add a variant, classify it below, and handle it in [`AppView::open_dropped_file`].
 enum DroppedFile {
     SqliteDatabase(PathBuf),
+    Notebook(PathBuf),
+}
+
+/// Whether `path` is named like a Jupyter notebook.
+pub(super) fn has_notebook_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ipynb"))
 }
 
 /// Whether `path` carries one of SQLite's conventional extensions. The header is authoritative for
@@ -46,6 +55,9 @@ fn has_sqlite_extension(path: &Path) -> bool {
 /// Decide what a dropped file is. Unrecognised formats return `None`; the drop handler then shows
 /// the generic "unsupported file type" message.
 fn classify_dropped_file(path: &Path) -> Option<DroppedFile> {
+    if has_notebook_extension(path) && path.is_file() {
+        return Some(DroppedFile::Notebook(path.to_path_buf()));
+    }
     if is_sqlite_file(path) || has_sqlite_extension(path) {
         return Some(DroppedFile::SqliteDatabase(path.to_path_buf()));
     }
@@ -149,6 +161,17 @@ impl AppView {
     fn open_dropped_file(&mut self, file: DroppedFile, cx: &mut Context<'_, Self>) {
         match file {
             DroppedFile::SqliteDatabase(path) => self.open_sqlite_file(path, cx),
+            DroppedFile::Notebook(path) => self.open_notebook_path(path, cx),
+        }
+    }
+
+    /// Open a file RustGrid was launched with (or that another launch forwarded): a notebook opens
+    /// in a notebook tab, anything else is tried as a SQLite database.
+    pub(crate) fn open_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        if has_notebook_extension(&path) {
+            self.open_notebook_path(path, cx);
+        } else {
+            self.open_sqlite_path(path, cx);
         }
     }
 
@@ -465,6 +488,26 @@ mod tests {
         let file = dir.join("sample.data");
         std::fs::write(&file, SQLITE_HEADER).unwrap();
         assert!(is_sqlite_file(&file));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_dropped_ipynb_opens_as_a_notebook() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustgrid-notebook-drop-{}",
+            crate::form::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Report.IPYNB");
+        std::fs::write(&file, b"{}").unwrap();
+        assert!(matches!(
+            classify_dropped_file(&file),
+            Some(DroppedFile::Notebook(path)) if path == file
+        ));
+        // A folder named like a notebook is not one.
+        let folder = dir.join("folder.ipynb");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(classify_dropped_file(&folder).is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

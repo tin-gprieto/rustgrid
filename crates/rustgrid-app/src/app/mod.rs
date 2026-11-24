@@ -3405,7 +3405,7 @@ impl AppView {
                 let opened = this.update(cx, |view, cx| {
                     view.pending_activate = true;
                     for path in paths {
-                        view.open_sqlite_path(path, cx);
+                        view.open_path(path, cx);
                     }
                     cx.notify();
                 });

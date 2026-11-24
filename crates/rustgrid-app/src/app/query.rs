@@ -692,21 +692,32 @@ impl AppView {
         }
     }
 
-    pub(super) fn sync_query_combos(&mut self, cx: &mut Context<'_, Self>) {
-        let Some(active) = self.active_query else {
-            return;
-        };
-        let Some(tab) = self.queries.get(active) else {
-            return;
-        };
-        // A group query has no single connection/database/schema picker; its target chip is drawn
-        // by `render_query_view` instead.
-        if tab.batch.is_some() {
-            return;
+    /// The connection/database/schema the shared pickers show: the shown query tab's, or the
+    /// shown notebook's. A group query has none (its target chip is drawn instead).
+    fn picker_binding(&self) -> Option<(Option<usize>, Option<String>, Option<String>)> {
+        if let Some(active) = self.active_query {
+            let tab = self.queries.get(active)?;
+            if tab.batch.is_some() {
+                return None;
+            }
+            return Some((
+                tab.connection_index,
+                tab.database.clone(),
+                tab.schema.clone(),
+            ));
         }
-        let connection_index = tab.connection_index;
-        let database = tab.database.clone();
-        let schema = tab.schema.clone();
+        let tab = self.notebooks.get(self.active_notebook?)?;
+        Some((
+            tab.connection_index,
+            tab.database.clone(),
+            tab.schema.clone(),
+        ))
+    }
+
+    pub(super) fn sync_query_combos(&mut self, cx: &mut Context<'_, Self>) {
+        let Some((connection_index, database, schema)) = self.picker_binding() else {
+            return;
+        };
         let has_connection = connection_index.is_some();
         let connection_selected = connection_index
             .map(|index| index.to_string())
@@ -750,7 +761,12 @@ impl AppView {
             && let Some(first) = schema_options.first().map(|option| option.value.clone())
         {
             schema_selected = Some(first.clone());
-            if let Some(tab) = self.queries.get_mut(active) {
+            if let Some(active) = self.active_query {
+                if let Some(tab) = self.queries.get_mut(active) {
+                    tab.schema = Some(first);
+                }
+            } else if let Some(tab) = self.active_notebook.and_then(|i| self.notebooks.get_mut(i)) {
+                // The default, not a user edit: the notebook stays clean.
                 tab.schema = Some(first);
             }
         }
@@ -784,17 +800,20 @@ impl AppView {
     }
 
     pub(super) fn query_connection_selected(&mut self, value: &str, cx: &mut Context<'_, Self>) {
-        let Some(index) = self.active_query else {
-            return;
-        };
         let connection_index = value.parse::<usize>().ok();
         let database = connection_index.and_then(|index| self.default_query_database(index, cx));
         let schema = connection_index
             .and_then(|index| self.default_query_schema(cx, index, database.as_deref()));
-        if let Some(tab) = self.queries.get_mut(index) {
-            tab.connection_index = connection_index;
-            tab.database = database;
-            tab.schema = schema;
+        if let Some(index) = self.active_query {
+            if let Some(tab) = self.queries.get_mut(index) {
+                tab.connection_index = connection_index;
+                tab.database = database;
+                tab.schema = schema;
+            }
+        } else if let Some(index) = self.active_notebook {
+            self.rebind_notebook(index, connection_index, database, schema, cx);
+        } else {
+            return;
         }
         if let Some(connection_index) = connection_index
             && !matches!(
@@ -810,21 +829,32 @@ impl AppView {
     }
 
     pub(super) fn query_database_selected(&mut self, value: &str, cx: &mut Context<'_, Self>) {
-        if let Some(index) = self.active_query
-            && let Some(tab) = self.queries.get_mut(index)
-        {
-            tab.database = Some(value.to_string());
-            // The old schema may not exist in the new database.
-            tab.schema = None;
+        if let Some(index) = self.active_query {
+            if let Some(tab) = self.queries.get_mut(index) {
+                tab.database = Some(value.to_string());
+                // The old schema may not exist in the new database.
+                tab.schema = None;
+            }
+        } else if let Some(index) = self.active_notebook {
+            let connection = self
+                .notebooks
+                .get(index)
+                .and_then(|tab| tab.connection_index);
+            self.rebind_notebook(index, connection, Some(value.to_string()), None, cx);
         }
         cx.notify();
     }
 
     pub(super) fn query_schema_selected(&mut self, value: &str, cx: &mut Context<'_, Self>) {
-        if let Some(index) = self.active_query
-            && let Some(tab) = self.queries.get_mut(index)
+        if let Some(index) = self.active_query {
+            if let Some(tab) = self.queries.get_mut(index) {
+                tab.schema = Some(value.to_string());
+            }
+        } else if let Some(index) = self.active_notebook
+            && let Some(tab) = self.notebooks.get(index)
         {
-            tab.schema = Some(value.to_string());
+            let (connection, database) = (tab.connection_index, tab.database.clone());
+            self.rebind_notebook(index, connection, database, Some(value.to_string()), cx);
         }
         cx.notify();
     }
