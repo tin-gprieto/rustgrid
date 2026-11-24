@@ -4,6 +4,7 @@
 # Uso:
 #   ./tools/install-desktop-entry.sh            # usa target/release/RustGrid o, si no existe, target/debug/RustGrid
 #   ./tools/install-desktop-entry.sh /ruta/RustGrid
+#   ./tools/install-desktop-entry.sh --build    # compila la rama actual (cargo build) antes de abrir
 #   ./tools/install-desktop-entry.sh --remove   # elimina los accesos directos
 #
 # También se puede ejecutar con doble clic desde el explorador de archivos
@@ -29,7 +30,11 @@ if [ "${1:-}" = "--remove" ]; then
   exit 0
 fi
 
-if [ -n "${1:-}" ]; then
+if [ "${1:-}" = "--build" ]; then
+  # El acceso directo pasa por tools/rustgrid-launch.sh, que compila y luego abre el binario.
+  BIN="$ROOT/tools/rustgrid-launch.sh"
+  chmod +x "$BIN"
+elif [ -n "${1:-}" ]; then
   BIN="$1"
 elif [ -x "$ROOT/target/release/RustGrid" ]; then
   BIN="$ROOT/target/release/RustGrid"
