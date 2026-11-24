@@ -5,11 +5,13 @@
 mod ipynb;
 mod model;
 mod outputs;
+mod sections;
 mod write;
 
 pub use ipynb::read_ipynb;
 pub use model::{Cell, CellKind, CellOutput, Notebook, NotebookBinding, RawKind};
 pub use outputs::results_to_outputs;
+pub use sections::{COLLAPSED_KEY, hidden_cells, section_end};
 pub use write::write_ipynb;
 
 /// Errors raised while reading or writing a notebook.
