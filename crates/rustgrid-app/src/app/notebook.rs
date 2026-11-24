@@ -8,44 +8,60 @@
 //! Restart made stale drops it, and [`ScriptSessionGuard`] releases it on the Tokio runtime.
 
 use super::query::{StatementOutcome, run_statements, split_for_run};
+use std::rc::Rc;
+
 use super::runsql::ScriptSessionGuard;
 use super::*;
 
 /// How many rows of each result set a cell keeps in its outputs (and so writes to the file).
 const NOTEBOOK_OUTPUT_MAX_ROWS: usize = 100;
 
-#[allow(dead_code)] // wired to the notebook view in the next stage
+/// What [`AppView::run_notebook_cell`] did with a cell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum CellRunStart {
+    /// The cell is running; its result arrives through `finish_notebook_run`.
+    Started,
+    /// Nothing to run (not an SQL cell, empty, or a run already in progress).
+    Skipped,
+    /// The cell failed before running (no open connection); its error is on the cell.
+    Failed,
+}
+
 impl AppView {
     fn notebook_position(&self, tab_id: u64) -> Option<usize> {
         self.notebooks.iter().position(|tab| tab.id == tab_id)
     }
 
-    /// Run the SQL cell at `cell_index` of notebook `tab_id` on the notebook's session. A run
-    /// already in progress, a non-SQL cell or an empty cell does nothing. Every statement of the
-    /// cell runs; the first failure stops the cell (as Jupyter does).
+    /// Run the SQL cell `cell_id` of notebook `tab_id` on the notebook's session. Every statement
+    /// of the cell runs; the first failure stops the cell (as Jupyter does).
     pub(super) fn run_notebook_cell(
         &mut self,
         tab_id: u64,
-        cell_index: usize,
+        cell_id: &str,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> CellRunStart {
         let Some(position) = self.notebook_position(tab_id) else {
-            return;
+            return CellRunStart::Skipped;
         };
+        // The editor owns the live text; the cell's copy is a mirror that may lag a keystroke.
+        if let Some(editor) = self.notebook_editors.get(&(tab_id, cell_id.to_string())) {
+            let text = editor.read(cx).live_text(cx);
+            self.notebooks[position].set_cell_source_by_id(cell_id, &text);
+        }
         let tab = &self.notebooks[position];
         if tab.running.is_some() {
-            return;
+            return CellRunStart::Skipped;
         }
-        let Some(state) = tab.cells.get(cell_index) else {
-            return;
+        let Some(state) = tab.cells.iter().find(|state| state.cell.id == cell_id) else {
+            return CellRunStart::Skipped;
         };
         if state.cell.kind != rustgrid_notebook::CellKind::Sql {
-            return;
+            return CellRunStart::Skipped;
         }
         let cell_id = state.cell.id.clone();
         let source = state.cell.source.trim().to_string();
         if source.is_empty() {
-            return;
+            return CellRunStart::Skipped;
         }
         let database = tab.database.clone();
         let connection_index = tab.connection_index;
@@ -53,7 +69,7 @@ impl AppView {
             self.notebooks[position].fail_cell(&cell_id, t!("query.not_connected").to_string());
             self.set_notebook_cell_grids(position, &cell_id, Vec::new(), cx);
             cx.notify();
-            return;
+            return CellRunStart::Failed;
         };
         let mysql = connection_index
             .is_some_and(|index| self.driver_dialect(index) == rustgrid_core::DriverDialect::Mysql);
@@ -61,11 +77,11 @@ impl AppView {
         // apply to it.
         let (statements, _) = split_for_run(&source, &connection, mysql, 0);
         if statements.is_empty() {
-            return;
+            return CellRunStart::Skipped;
         }
 
         let Some((generation, cancel)) = self.notebooks[position].begin_run(&cell_id) else {
-            return;
+            return CellRunStart::Skipped;
         };
         let pinned = self.notebook_sessions.remove(&tab_id);
         cx.notify();
@@ -142,6 +158,139 @@ impl AppView {
             });
         })
         .detach();
+        CellRunStart::Started
+    }
+
+    /// The editor of the SQL cell `cell_id` in the notebook at `index`, created on first use with
+    /// the cell's text and the connection's highlighting. Its edits are mirrored into the cell.
+    pub(super) fn ensure_notebook_editor(
+        &mut self,
+        index: usize,
+        cell_id: &str,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<Entity<ui::SqlEditor>> {
+        let tab = self.notebooks.get(index)?;
+        let tab_id = tab.id;
+        let key = (tab_id, cell_id.to_string());
+        if let Some(editor) = self.notebook_editors.get(&key) {
+            return Some(editor.clone());
+        }
+        let source = tab
+            .cells
+            .iter()
+            .find(|state| state.cell.id == cell_id)?
+            .cell
+            .source
+            .clone();
+        let connection_index = tab.connection_index;
+        let database = tab.database.clone();
+        let schema = tab.schema.clone();
+        let dialect = connection_index
+            .map(|connection| self.driver_dialect(connection))
+            .unwrap_or_default();
+        let supports_schemas = connection_index
+            .is_some_and(|connection| self.driver_supports(connection, DriverCapability::Schemas));
+        let options = ui::SqlEditorOptions {
+            language: "sql".into(),
+            font_family: self.editor_font().into(),
+            font_size: self.editor_font_size(),
+            line_number: self.editor_line_numbers,
+            readonly: false,
+        };
+        let weak = cx.weak_entity();
+        let zoom_weak = weak.clone();
+        let change_id = cell_id.to_string();
+        let editor = cx.new(|cx| {
+            let mut editor = ui::SqlEditor::new(cx)
+                .options(options)
+                .on_change(Rc::new(move |text, cx| {
+                    let _ = weak.update(cx, |app, cx| {
+                        if let Some(position) = app.notebook_position(tab_id) {
+                            let tab = &mut app.notebooks[position];
+                            let was_dirty = tab.dirty;
+                            let old_lines = tab
+                                .cells
+                                .iter()
+                                .find(|state| state.cell.id == change_id)
+                                .map(|state| state.cell.source.lines().count());
+                            tab.set_cell_source_by_id(&change_id, text);
+                            // Re-render only when something drawn outside the editor changes: the
+                            // tab's `*` on the first edit, or the editor's height (its line count).
+                            if (!was_dirty && tab.dirty) || old_lines != Some(text.lines().count())
+                            {
+                                cx.notify();
+                            }
+                        }
+                    });
+                }))
+                .on_zoom(Rc::new(move |step, cx| {
+                    zoom_weak
+                        .update(cx, |app, cx| app.zoom_editor_font(step, cx))
+                        .unwrap_or(false)
+                }));
+            editor.set_scope(
+                connection_index,
+                database,
+                schema,
+                supports_schemas,
+                dialect,
+                false,
+                false,
+                cx,
+            );
+            editor.set_text(source, cx);
+            editor
+        });
+        self.notebook_editors.insert(key, editor.clone());
+        Some(editor)
+    }
+
+    /// Run the selected cell of the notebook at `index`.
+    pub(super) fn run_selected_notebook_cell(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        let Some(tab) = self.notebooks.get(index) else {
+            return;
+        };
+        let tab_id = tab.id;
+        if let Some(cell_id) = tab
+            .cells
+            .get(tab.selected)
+            .map(|state| state.cell.id.clone())
+        {
+            self.run_notebook_cell(tab_id, &cell_id, cx);
+        }
+    }
+
+    /// Run All: run every SQL cell from the top, one after another, stopping at the first error.
+    pub(super) fn run_all_notebook_cells(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        let Some(tab) = self.notebooks.get_mut(index) else {
+            return;
+        };
+        if tab.running.is_some() {
+            return;
+        }
+        let tab_id = tab.id;
+        let first = tab.queue_run_all(0);
+        self.run_queued_notebook_cells(tab_id, first, cx);
+    }
+
+    /// Start the first cell of the Run All queue that actually runs: empty cells are passed over,
+    /// a cell that cannot start (no connection) ends the queue.
+    fn run_queued_notebook_cells(
+        &mut self,
+        tab_id: u64,
+        mut next: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        while let Some(cell_id) = next {
+            let outcome = self.run_notebook_cell(tab_id, &cell_id, cx);
+            if outcome == CellRunStart::Started {
+                return;
+            }
+            let Some(position) = self.notebook_position(tab_id) else {
+                return;
+            };
+            next = self.notebooks[position].next_queued(outcome == CellRunStart::Skipped);
+        }
     }
 
     /// Install a cell run's results and give the session back to the notebook. A stale run (the
@@ -166,6 +315,7 @@ impl AppView {
         if generation != tab.run_generation {
             return;
         }
+        let succeeded = error.is_none();
         let installed = tab.finish_run(
             cell_id,
             generation,
@@ -181,6 +331,10 @@ impl AppView {
         // sessions, or one lost to a failed task) is opened again on the next run.
         if let Some(session) = session.filter(|session| session.session.is_some()) {
             self.notebook_sessions.insert(tab_id, session);
+        }
+        if installed {
+            let next = self.notebooks[position].next_queued(succeeded);
+            self.run_queued_notebook_cells(tab_id, next, cx);
         }
         cx.notify();
     }
@@ -287,6 +441,7 @@ impl AppView {
             return;
         };
         self.release_notebook_resources(position, cx);
+        self.notebook_editors.retain(|(id, _), _| *id != tab_id);
         self.notebooks.remove(position);
         match self.active_notebook {
             Some(active) if active == position => {

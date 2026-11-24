@@ -2478,6 +2478,9 @@ pub struct AppView {
     /// The notebook tab shown now, indexed into `notebooks`. Cleared wherever `active_design` is,
     /// and checked right after it, so a notebook tab behaves like a designer tab.
     active_notebook: Option<usize>,
+    /// The editor of each SQL cell, by (notebook id, cell id): cell ids are only unique within a
+    /// notebook (the same file can be open twice), and keying by id survives moving a cell.
+    notebook_editors: std::collections::HashMap<(u64, String), Entity<ui::SqlEditor>>,
     next_notebook_id: u64,
     /// The pinned database session of each notebook, by notebook id. Kept apart from the tab
     /// because a session is not `Clone` and is not tab state.
@@ -3458,6 +3461,7 @@ impl AppView {
             next_query_id: 0,
             notebooks: Vec::new(),
             active_notebook: None,
+            notebook_editors: std::collections::HashMap::new(),
             next_notebook_id: 0,
             notebook_sessions: std::collections::HashMap::new(),
             query_files,
@@ -4376,6 +4380,7 @@ impl AppView {
             .flatten()
             // The result/信息 log is deliberately not zoomed; it stays at its fixed 12px.
             .chain(self.preview_editors.values())
+            .chain(self.notebook_editors.values())
             .cloned()
             .collect()
     }
@@ -4402,8 +4407,15 @@ impl AppView {
         let size = self.editor_font_size();
         let word_wrap = self.editor_word_wrap;
         let line_numbers = self.editor_line_numbers;
-        let query_editors = self.query_editors.clone();
-        for editor in query_editors.into_iter().flatten() {
+        // Notebook cell editors are full editors too, so they follow the same settings.
+        let query_editors: Vec<_> = self
+            .query_editors
+            .iter()
+            .flatten()
+            .chain(self.notebook_editors.values())
+            .cloned()
+            .collect();
+        for editor in query_editors {
             editor.update(cx, |editor, cx| {
                 editor.set_display_options(font.clone(), size, line_numbers, word_wrap, window, cx)
             });
