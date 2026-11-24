@@ -220,7 +220,9 @@ not a later refactor.
   shape: an SQL cell is a code cell starting with `%%sql` (the line's arguments kept verbatim in
   `magic_args`, never interpreted), any other code cell is a `Raw` cell kept as it is, a
   `%load_ext sql` cell is added when none loads the extension (the app keeps a pure loader cell,
-  `Cell::is_sql_extension_loader`, out of the cell list and writes it back first), results are `execute_result`
+  `Cell::is_sql_extension_loader`, out of the cell list and writes it back first), a code cell tagged `parameters` whose lines are all
+  `name = literal` is a `Parameters` cell (`params.rs`: parse/format the Python literals and
+  `substitute` `{{name}}` as plain text, as JupySQL does — not a bound parameter), results are `execute_result`
   `text/html` + `text/plain` tables (`results_to_outputs`, capped by a row count), and everything
   unmodelled (metadata, unknown outputs, top-level keys) round-trips. `metadata.rustgrid` holds only
   the connection's **profile id**, database and schema (a test asserts no host/user/password reaches
@@ -1212,6 +1214,10 @@ shadcn chrome described above. Implemented today:
     `#[must_use]` returns and `remove_grids_by_id`. Cell editors are `ui::SqlEditor`s keyed by
     `(notebook id, cell id)` with the query editor's completion (`sql_completion`). The toolbar reuses
     the query tab's connection/database/schema pickers (`picker_binding`, `rebind_notebook`).
+    A Parameters cell is a name / value table (`NotebookCellState::param_rows`, fields in
+    `notebook_param_inputs`); an SQL cell's `{{name}}` is expanded from the parameters cells above
+    it (`NotebookTab::params_before`) before it runs, and an undefined name fails the cell.
+    Run All stops at the first failing cell and selects it.
     Jupyter's keys are `keymap` commands in the `Notebook` group, bound at `Notebook > Input` so they
     outrank the kit input's own Enter/Escape. Files: New Notebook (toolbar, connection/database menus),
     Open Notebook…, drag-and-drop and command-line paths (`file_drop.rs::open_path`), Save / Save As

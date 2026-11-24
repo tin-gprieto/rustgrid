@@ -29,14 +29,33 @@ Notebooks need a SQL engine: Redis and MongoDB connections do not offer them.
 | --- | --- |
 | **SQL** | Runs its statements in order on the notebook's session and shows every result set as a grid (up to 10 rows high, scrolling past that); a statement without rows shows its affected-row count. The first failing statement stops the cell and is shown in red. |
 | **Markdown** | Rendered text. Double-click to edit; ✓ in its header, `Ctrl+Enter` or selecting another cell renders it again. |
+| **Parameters** | A name / value table (`+` adds a row under one, `−` removes it). `{{name}}` in the SQL cells **below** it is replaced by the value before the cell runs; when a name is defined in several parameters cells, the last one above wins. Nothing runs in the cell itself. |
 | **Raw** | Any other code cell of an opened file (Python, `%sql` line magics, …) or an nbformat `raw` cell. Shown read-only and kept as it is; RustGrid never runs it. |
 
-Each cell header offers change type (SQL ↔ Markdown), move up / down, delete, and — when the cell has
+Each cell header offers change type (SQL ↔ Markdown; not for Parameters and Raw cells), move up / down, delete, and — when the cell has
 results — **Export results**, which opens the Export Wizard (several result sets can go into one
 `.xlsx` workbook). SQL cells complete tables, columns and keywords like the query editor.
 
-**Run All** runs every SQL cell from the top and stops at the first cell that fails; **Stop** cancels
-the running cell; **Restart** drops the session.
+**Run All** runs every SQL cell from the top and stops at the first cell that fails, which it
+selects (unfolding its section); **Stop** cancels the running cell; **Restart** drops the session.
+
+### Parameters
+
+```
+country = "AR"          ← the Parameters cell, as saved
+year = 2025
+
+SELECT * FROM sales WHERE country = '{{country}}' AND year = {{ year }}
+```
+
+The value is pasted into the SQL **as text**, exactly as JupySQL does — it is not a bound
+parameter, so it gives no protection against SQL injection, and text needs its own quotes
+(`'{{country}}'`). The whole cell text is expanded, string literals and comments included. Only a
+plain name is expanded (spaces inside the braces are allowed); anything else between `{{ }}` is left
+as written. A `{{name}}` that no parameters cell above defines fails the cell before anything runs
+(and stops Run All). A value that reads as a number, `True`, `False` or `None` is saved as that
+Python literal; anything else is saved as a string. A row whose name is not a valid identifier yet
+is kept in the table but left out of the file.
 
 ### Collapsible sections
 
@@ -82,6 +101,9 @@ The file is nbformat 4.5 for a Python kernel:
 
 - an SQL cell is a code cell starting with `%%sql` (anything after `%%sql` on that line is kept but
   not interpreted by RustGrid);
+- a Parameters cell is a code cell tagged `parameters` (papermill's convention) with one Python
+  assignment per line (`country = "AR"`), so in Jupyter it defines the variables JupySQL expands.
+  A tagged cell with any other line (a comment, a call, …) opens as a Raw cell;
 - a `%load_ext sql` cell is added at the top when the file has none, so JupySQL loads. RustGrid
   does not show a cell that only loads the extension, and writes it back unchanged on save;
 - results are `execute_result` outputs with `text/html` and `text/plain` tables, errors are `error`
@@ -99,7 +121,8 @@ the `%%sql` cells: the file names the connection only by RustGrid's id, so Jupyt
 ## Limitations
 
 - No Python: only SQL and Markdown cells run. Other code cells are kept, not executed.
-- `%%sql` arguments (`--save`, `--with`, `<<` variables, a connection name, …) and `{{variable}}`
-  templates are not interpreted.
+- `%%sql` arguments (`--save`, `--with`, `<<` variables, a connection name, …) are not
+  interpreted: those cells run as plain SQL. `{{ }}` only takes a parameter name (no Jinja
+  expressions or filters).
 - No pinned session on SQL Server, Oracle and ODBC (see *Sessions*).
 - Result grids in a notebook are read-only.
