@@ -744,6 +744,20 @@ impl AppView {
         .detach();
     }
 
+    /// Add `notebook` as a new (not shown) tab and return its index.
+    pub(super) fn push_notebook_tab(
+        &mut self,
+        path: Option<PathBuf>,
+        notebook: rustgrid_notebook::Notebook,
+        connection_index: Option<usize>,
+    ) -> usize {
+        let id = self.next_notebook_id;
+        self.next_notebook_id += 1;
+        let tab = crate::session::NotebookTab::from_notebook(id, notebook, path, connection_index);
+        self.notebooks.push(tab);
+        self.notebooks.len() - 1
+    }
+
     /// Add a notebook read from `path` as a tab, bound to its saved connection when it exists.
     fn install_opened_notebook(
         &mut self,
@@ -760,12 +774,8 @@ impl AppView {
                 .iter()
                 .position(|node| node.profile.id == id)
         });
-        let id = self.next_notebook_id;
-        self.next_notebook_id += 1;
-        let tab =
-            crate::session::NotebookTab::from_notebook(id, notebook, Some(path), connection_index);
-        self.notebooks.push(tab);
-        self.activate_notebook(self.notebooks.len() - 1, cx);
+        let index = self.push_notebook_tab(Some(path), notebook, connection_index);
+        self.activate_notebook(index, cx);
         match connection_index {
             Some(index) => {
                 if !matches!(

@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use rustgrid_config::{
-    SessionActive, SessionDatabase, SessionQuery, SessionTable, WorkspaceSession,
+    SessionActive, SessionDatabase, SessionNotebook, SessionQuery, SessionTable, WorkspaceSession,
 };
 
 use super::*;
@@ -88,6 +88,35 @@ impl AppView {
                 })
             })
             .or_else(|| self.pending_session_current.clone());
+        let notebooks = self
+            .notebooks
+            .iter()
+            .map(|tab| {
+                let live_id = tab
+                    .connection_index
+                    .and_then(|index| self.connections.get(index))
+                    .map(|node| node.profile.id.clone());
+                // An unsaved (or never saved) notebook keeps its whole text; a clean one reloads.
+                let content = (tab.dirty || tab.path.is_none())
+                    .then(|| rustgrid_notebook::write_ipynb(&tab.to_notebook(live_id.as_deref())));
+                SessionNotebook {
+                    path: tab.path.clone(),
+                    connection_id: live_id.or_else(|| tab.saved_connection_id().map(str::to_owned)),
+                    database: tab.database.clone(),
+                    schema: tab.schema.clone(),
+                    content,
+                }
+            })
+            .collect();
+        // The notebook tab takes precedence like the designer does (`current_tab`).
+        let active_notebook = self
+            .active_query
+            .is_none()
+            .then_some(self.active_notebook)
+            .flatten();
+        if active_notebook.is_some() {
+            active = None;
+        }
         WorkspaceSession {
             connections,
             queries,
@@ -95,7 +124,40 @@ impl AppView {
             active,
             databases,
             current_database,
+            notebooks,
+            active_notebook,
         }
+    }
+
+    /// Reopen the session's notebooks: from their unsaved text, else from their file. A file
+    /// that can no longer be read is skipped (and so drops out of the next session).
+    fn restore_session_notebooks(&mut self, notebooks: &[SessionNotebook]) -> Vec<Option<usize>> {
+        let mut restored = Vec::new();
+        for saved in notebooks {
+            let unsaved = saved.content.is_some();
+            let text = match (&saved.content, &saved.path) {
+                (Some(content), _) => Some(content.clone()),
+                (None, Some(path)) => std::fs::read_to_string(path).ok(),
+                (None, None) => None,
+            };
+            let Some(notebook) = text.and_then(|text| rustgrid_notebook::read_ipynb(&text).ok())
+            else {
+                restored.push(None);
+                continue;
+            };
+            let connection_index = saved.connection_id.as_ref().and_then(|id| {
+                self.connections
+                    .iter()
+                    .position(|node| &node.profile.id == id)
+            });
+            let index = self.push_notebook_tab(saved.path.clone(), notebook, connection_index);
+            let tab = &mut self.notebooks[index];
+            tab.database = saved.database.clone();
+            tab.schema = saved.schema.clone();
+            tab.dirty = unsaved;
+            restored.push(Some(index));
+        }
+        restored
     }
 
     /// The databases open in the tree right now.
@@ -143,7 +205,23 @@ impl AppView {
             )
                 .hash(&mut hasher);
         }
-        (self.active_query, self.active_grid).hash(&mut hasher);
+        for tab in &self.notebooks {
+            (
+                &tab.path,
+                tab.connection_index,
+                &tab.database,
+                &tab.schema,
+                tab.dirty,
+            )
+                .hash(&mut hasher);
+            // An unsaved notebook's text is part of the session, so its edits must re-save it.
+            if tab.dirty {
+                for state in &tab.cells {
+                    (&state.cell.id, &state.cell.source, state.cell.kind as u8).hash(&mut hasher);
+                }
+            }
+        }
+        (self.active_query, self.active_grid, self.active_notebook).hash(&mut hasher);
         self.pending_session_tables.len().hash(&mut hasher);
         self.open_session_databases().hash(&mut hasher);
         self.object_pane
@@ -231,6 +309,13 @@ impl AppView {
             && index < self.queries.len()
         {
             self.activate_query(index, cx);
+        }
+        let notebooks = self.restore_session_notebooks(&session.notebooks);
+        if let Some(index) = session
+            .active_notebook
+            .and_then(|position| notebooks.get(position).copied().flatten())
+        {
+            self.activate_notebook(index, cx);
         }
         // Reconnect what was open, but only where no password prompt would interrupt the start.
         let reconnect: Vec<usize> = session

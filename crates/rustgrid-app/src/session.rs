@@ -1167,6 +1167,12 @@ impl NotebookTab {
         was_running
     }
 
+    /// The connection id the notebook was loaded or last saved with, kept while its connection is
+    /// missing so a later save (or the session) does not lose it.
+    pub fn saved_connection_id(&self) -> Option<&str> {
+        self.loaded_connection_id.as_deref()
+    }
+
     /// The notebook was written to `path` bound to `connection_id`: it is clean and that file is
     /// now where Save writes.
     pub fn mark_saved(&mut self, path: std::path::PathBuf, connection_id: Option<String>) {

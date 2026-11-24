@@ -60,6 +60,31 @@ pub struct WorkspaceSession {
     /// The database whose objects the object list showed (Navicat's current database).
     #[serde(default)]
     pub current_database: Option<SessionDatabase>,
+    /// The notebook tabs, in tab order.
+    #[serde(default)]
+    pub notebooks: Vec<SessionNotebook>,
+    /// The notebook that was shown, an index into `notebooks`. Kept apart from `active` (which
+    /// stays `None` then) so an older build still reads the file.
+    #[serde(default)]
+    pub active_notebook: Option<usize>,
+}
+
+/// One notebook tab of a [`WorkspaceSession`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionNotebook {
+    /// The `.ipynb` the tab is bound to; `None` for a notebook never saved.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// The notebook's unsaved `.ipynb` text ("hot exit"); `None` when the file is current, so the
+    /// tab reloads from `path`.
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 /// A database of a [`WorkspaceSession`], by its connection's profile id and its name.
@@ -1042,6 +1067,14 @@ mod tests {
                 connection_id: "conn-1".to_string(),
                 database: "shop".to_string(),
             }),
+            notebooks: vec![SessionNotebook {
+                path: Some(PathBuf::from("/tmp/report.ipynb")),
+                connection_id: Some("conn-1".to_string()),
+                database: Some("shop".to_string()),
+                content: Some("{}".to_string()),
+                ..Default::default()
+            }],
+            active_notebook: Some(0),
         };
         let json = serde_json::to_string(&SessionFile {
             version: SESSION_VERSION,
@@ -1053,6 +1086,13 @@ mod tests {
 
         let minimal: SessionFile = serde_json::from_str(r#"{ "version": 1 }"#).expect("minimal");
         assert_eq!(minimal.session, WorkspaceSession::default());
+
+        // A session written before notebooks existed still loads, with none.
+        let old: SessionFile =
+            serde_json::from_str(r#"{ "version": 1, "connections": ["conn-1"], "active": null }"#)
+                .expect("pre-notebook session");
+        assert!(old.session.notebooks.is_empty());
+        assert_eq!(old.session.active_notebook, None);
     }
 
     #[test]
