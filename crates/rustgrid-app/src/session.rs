@@ -826,6 +826,8 @@ pub struct NotebookTab {
     pub dirty: bool,
     /// Set by Stop: the running cell skips its remaining statements.
     pub run_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Run All: the ids of the SQL cells still to run after the running one, in order.
+    run_queue: std::collections::VecDeque<String>,
     /// The connection id the file was loaded with. The id may name a profile this machine does
     /// not have (`connection_index` is then `None`), and it must survive a save so the binding is
     /// not stripped from the file; an explicit [`NotebookTab::set_binding`] clears it.
@@ -864,6 +866,7 @@ impl NotebookTab {
             execution_counter,
             dirty: false,
             run_cancel: None,
+            run_queue: std::collections::VecDeque::new(),
             base: notebook,
         }
     }
@@ -884,6 +887,37 @@ impl NotebookTab {
             schema: self.schema.clone(),
         });
         notebook
+    }
+
+    /// Mirror an editor's text into the cell `cell_id`; only a real change marks the tab dirty.
+    pub fn set_cell_source_by_id(&mut self, cell_id: &str, source: &str) {
+        if let Some(state) = self.cells.iter_mut().find(|state| state.cell.id == cell_id)
+            && state.cell.source != source
+        {
+            state.cell.source = source.to_string();
+            self.dirty = true;
+        }
+    }
+
+    /// Run All from `from`: queue every SQL cell at or after it and return the first one to run.
+    pub fn queue_run_all(&mut self, from: usize) -> Option<String> {
+        self.run_queue = self
+            .cells
+            .iter()
+            .skip(from)
+            .filter(|state| state.cell.kind == rustgrid_notebook::CellKind::Sql)
+            .map(|state| state.cell.id.clone())
+            .collect();
+        self.run_queue.pop_front()
+    }
+
+    /// After a queued cell finished: the next cell to run, or `None` when the queue is done. A
+    /// failed cell ends Run All (as in Jupyter), so the rest of the queue is dropped.
+    pub fn next_queued(&mut self, succeeded: bool) -> Option<String> {
+        if !succeeded {
+            self.run_queue.clear();
+        }
+        self.run_queue.pop_front()
     }
 
     pub fn set_cell_source(&mut self, index: usize, source: String) {
@@ -1049,6 +1083,7 @@ impl NotebookTab {
         if let Some(cancel) = self.run_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        self.run_queue.clear();
         self.run_generation = self.run_generation.wrapping_add(1);
         self.running = None;
         was_running
@@ -2188,6 +2223,41 @@ mod tests {
             assert_eq!(tab.connection_index, None);
             assert!(!tab.connection_removed(0));
             assert!(!tab.dirty);
+        }
+
+        #[test]
+        fn run_all_queues_sql_cells_and_stops_on_error_or_stop() {
+            let mut tab = sql_tab();
+            tab.insert_cell(1, rustgrid_notebook::Cell::new_markdown("# notes"));
+            let first = tab.cells[0].cell.id.clone();
+            let last = tab.cells[2].cell.id.clone();
+            assert_eq!(tab.queue_run_all(0), Some(first));
+            assert_eq!(tab.next_queued(true), Some(last.clone()));
+            assert_eq!(tab.next_queued(true), None);
+
+            // From a later cell only the cells below it run.
+            assert_eq!(tab.queue_run_all(1), Some(last));
+            assert_eq!(tab.next_queued(true), None);
+
+            // A failure drops the rest.
+            assert!(tab.queue_run_all(0).is_some());
+            assert_eq!(tab.next_queued(false), None);
+
+            // So does Stop.
+            assert!(tab.queue_run_all(0).is_some());
+            tab.stop_run();
+            assert_eq!(tab.next_queued(true), None);
+        }
+
+        #[test]
+        fn editor_text_marks_dirty_only_on_change() {
+            let mut tab = sql_tab();
+            let id = tab.cells[0].cell.id.clone();
+            tab.set_cell_source_by_id(&id, "select 1");
+            assert!(!tab.dirty);
+            tab.set_cell_source_by_id(&id, "select 10");
+            assert!(tab.dirty);
+            assert_eq!(tab.cells[0].cell.source, "select 10");
         }
 
         #[test]
